@@ -15,6 +15,7 @@ import (
 	"os"
 
 	"github.com/andyliu/vessel/pkg/api"
+	"github.com/andyliu/vessel/pkg/driver/cloudhypervisor"
 	"github.com/andyliu/vessel/pkg/driver/process"
 	"github.com/andyliu/vessel/pkg/sandbox"
 )
@@ -22,6 +23,10 @@ import (
 func main() {
 	mgr := sandbox.NewManager()
 	mgr.RegisterDriver(process.New())
+	mgr.RegisterDriver(cloudhypervisor.New(cloudhypervisor.Config{
+		KernelPath: os.Getenv("VESSEL_KERNEL"),
+		RootfsPath: os.Getenv("VESSEL_ROOTFS"),
+	}))
 
 	if len(os.Args) < 2 {
 		usage()
