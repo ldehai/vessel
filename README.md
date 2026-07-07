@@ -1,40 +1,79 @@
 # vessel（暂定名）
 
-Agent 原生沙箱运行时：底层复用成熟 VMM（Cloud Hypervisor / Firecracker，可插拔），
-上层同时暴露 containerd shim（进 K8s）和 REST/gRPC Agent API，主打快照恢复带来的
-<100ms 冷启动。定位与路线图见仓库外的《sandbox-runtime-分析报告.md》。
+Agent 原生沙箱运行时：底层复用成熟 VMM（Cloud Hypervisor，驱动可插拔），上层同时面向
+K8s（后续 containerd shim）和 AI 应用（REST API + SDK），核心卖点是快照 fork——
+一个预热好的模板沙箱克隆出 N 个会话，跳过内核启动，冷启动目标 <100ms。
+定位与路线图见仓库外的《sandbox-runtime-分析报告.md》。
 
-## 当前状态：M1 骨架
+## 当前状态
 
-已有：核心域模型（Spec / Instance / Driver / Manager）、process 驱动
-（Linux user+PID+mount+UTS+IPC namespace，开发与测试用，非生产隔离）、
-REST API 雏形、CLI。
+M1~M3 已实现：
 
-## 使用
+- **核心域**（`pkg/sandbox`）：Spec / Instance / Driver / Restorer 接口，Manager 生命周期与 fork 语义
+- **process 驱动**（`pkg/driver/process`）：Linux user+pid+mnt+uts+ipc namespace，开发测试用，非生产隔离
+- **Cloud Hypervisor 驱动**（`pkg/driver/cloudhypervisor`）：REST API 客户端、microVM 启动、
+  hybrid vsock（CONNECT/OK 握手）连接 guest agent、pause+snapshot、restore+resume
+- **guest agent**（`pkg/agent` + `cmd/vessel-agent`）：JSON-over-vsock 协议，exec / 文件读写，
+  作为 guest init 运行
+- **REST API**（`pkg/api`）：create / list / exec / snapshot / fork
+- **Python SDK**（`sdk/python/vessel.py`）：零依赖客户端
+
+## 快速开始
 
 ```bash
 go build ./cmd/vessel
 
-# 在命名空间沙箱里跑命令（Linux）
-./vessel run -- sh -c 'echo hello from PID $$; hostname'
+# 开发模式：namespace 沙箱（Linux，无需 KVM）
+./vessel run -- sh -c 'echo hello from PID $$'
 
-# 启动 API 守护进程
+# API 守护进程
 ./vessel serve -addr :7070
-curl -X POST localhost:7070/v1/sandboxes -d '{"driver":"process","spec":{}}'
-curl -X POST localhost:7070/v1/sandboxes/<id>/exec -d '{"cmd":["uname","-a"]}'
+```
+
+```python
+import sys; sys.path.insert(0, "sdk/python")
+from vessel import VesselClient
+
+v = VesselClient("http://localhost:7070")
+sb = v.create(driver="process")            # 或 "cloudhypervisor"
+print(sb.exec(["python3", "-c", "print(42)"]).stdout)
+clone = sb.fork("/var/lib/vessel/snap-1")  # VM 驱动限定
+```
+
+microVM 模式需要 Linux + KVM，以及 guest 内核和内置 vessel-agent 的 rootfs：
+
+```bash
+CGO_ENABLED=0 GOOS=linux go build -o vessel-agent ./cmd/vessel-agent  # 放进 rootfs
+VESSEL_KERNEL=/path/vmlinux VESSEL_ROOTFS=/path/rootfs.img ./vessel serve
 ```
 
 ## 目录结构
 
 ```
-cmd/vessel/          CLI 入口（run / serve / info）
-pkg/sandbox/         核心域：Spec、状态机、Driver 接口、Manager
-pkg/driver/process/  开发驱动：Linux namespaces（M2 将新增 cloudhypervisor/）
-pkg/api/             REST API（M3 加 gRPC + 快照/fork + SDK）
+cmd/vessel/                  CLI + API daemon
+cmd/vessel-agent/            guest init 二进制（vsock listener）
+pkg/sandbox/                 核心域模型与 Manager
+pkg/agent/                   host<->guest 协议（client/server）
+pkg/vsock/                   AF_VSOCK dial/listen（Linux）
+pkg/driver/process/          开发驱动（namespaces）
+pkg/driver/cloudhypervisor/  生产驱动（microVM）
+pkg/api/                     REST API
+sdk/python/                  Python SDK
 ```
+
+## 测试
+
+```bash
+go test ./...
+```
+
+真实 VMM 交互用 mock（unix socket 上的假 CH API、假 hybrid vsock 后接真 agent）覆盖；
+KVM 上的真机 e2e 与冷启动 benchmark 是下一步。
 
 ## 路线图
 
-M1 骨架（当前）→ M2 Cloud Hypervisor 驱动 + vsock guest-agent →
-M3 snapshot/restore/fork、冷启动 <100ms、Python/TS SDK →
-M4 containerd shim v2 + K8s RuntimeClass，发布 v0.1。
+- [x] M1 核心域 + process 驱动 + REST + CLI
+- [x] M2 guest agent（vsock）+ Cloud Hypervisor 驱动
+- [x] M3 snapshot / restore / fork + Python SDK
+- [ ] M3.5 KVM 真机 e2e、guest 镜像构建脚本、冷启动 benchmark（vs Kata/E2B/microsandbox）
+- [ ] M4 containerd shim v2 + K8s RuntimeClass，多 fork 的 vsock socket 重映射，发布 v0.1
