@@ -37,7 +37,7 @@ func (c *Config) withDefaults() Config {
 		out.StateDir = filepath.Join(os.TempDir(), "vessel-ch")
 	}
 	if out.Cmdline == "" {
-		out.Cmdline = "console=hvc0 root=/dev/vda ro init=/usr/bin/vessel-agent"
+		out.Cmdline = "console=hvc0 root=/dev/vda ro init=/sbin/init"
 	}
 	if out.BootWait == 0 {
 		out.BootWait = 10 * time.Second

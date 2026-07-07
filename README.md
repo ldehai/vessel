@@ -40,11 +40,13 @@ print(sb.exec(["python3", "-c", "print(42)"]).stdout)
 clone = sb.fork("/var/lib/vessel/snap-1")  # VM 驱动限定
 ```
 
-microVM 模式需要 Linux + KVM，以及 guest 内核和内置 vessel-agent 的 rootfs：
+microVM 模式需要 Linux + KVM。guest 内核和 rootfs 用 `images/` 下的脚本构建（见
+`images/README.md`）：
 
 ```bash
-CGO_ENABLED=0 GOOS=linux go build -o vessel-agent ./cmd/vessel-agent  # 放进 rootfs
-VESSEL_KERNEL=/path/vmlinux VESSEL_ROOTFS=/path/rootfs.img ./vessel serve
+cd images && ./build-kernel.sh -o vmlinux && ./build-rootfs.sh -o rootfs.img
+VESSEL_KERNEL=$PWD/vmlinux VESSEL_ROOTFS=$PWD/rootfs.img ../vessel serve
+../bench/coldstart.sh   # 冷启动 benchmark
 ```
 
 ## 目录结构
@@ -75,5 +77,6 @@ KVM 上的真机 e2e 与冷启动 benchmark 是下一步。
 - [x] M1 核心域 + process 驱动 + REST + CLI
 - [x] M2 guest agent（vsock）+ Cloud Hypervisor 驱动
 - [x] M3 snapshot / restore / fork + Python SDK
-- [ ] M3.5 KVM 真机 e2e、guest 镜像构建脚本、冷启动 benchmark（vs Kata/E2B/microsandbox）
+- [x] M3.5a guest 镜像构建脚本（内核 + Alpine/vessel-agent rootfs）、冷启动 benchmark 脚本
+- [ ] M3.5b KVM 真机 e2e、冷启动数据（vs Kata/E2B/microsandbox）
 - [ ] M4 containerd shim v2 + K8s RuntimeClass，多 fork 的 vsock socket 重映射，发布 v0.1
