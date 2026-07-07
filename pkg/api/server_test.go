@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/andyliu/vessel/pkg/sandbox"
+	"github.com/ldehai/vessel/pkg/sandbox"
 )
 
 func newTestServer(t *testing.T) (*httptest.Server, *sandbox.Manager) {

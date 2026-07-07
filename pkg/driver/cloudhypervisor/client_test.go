@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/andyliu/vessel/pkg/agent"
+	"github.com/ldehai/vessel/pkg/agent"
 )
 
 // mockCH serves a fake Cloud Hypervisor REST API on a unix socket and

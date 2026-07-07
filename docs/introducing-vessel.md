@@ -52,7 +52,7 @@ The layer vessel occupies — orchestration above the VMM, integration with cont
 ## Try it, break it
 
 ```bash
-git clone https://github.com/andyliu/vessel && cd vessel
+git clone https://github.com/ldehai/vessel && cd vessel
 go build ./cmd/vessel
 ./vessel run -- sh -c 'echo hello from PID $$'   # namespace sandbox, no KVM needed
 ```

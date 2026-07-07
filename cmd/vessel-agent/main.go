@@ -15,8 +15,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/andyliu/vessel/pkg/agent"
-	"github.com/andyliu/vessel/pkg/vsock"
+	"github.com/ldehai/vessel/pkg/agent"
+	"github.com/ldehai/vessel/pkg/vsock"
 )
 
 const defaultVsockPort = 5000
