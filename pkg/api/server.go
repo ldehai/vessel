@@ -20,6 +20,8 @@ func NewServer(mgr *sandbox.Manager) *Server {
 	s.mux.HandleFunc("GET /v1/sandboxes", s.list)
 	s.mux.HandleFunc("POST /v1/sandboxes", s.create)
 	s.mux.HandleFunc("POST /v1/sandboxes/{id}/exec", s.exec)
+	s.mux.HandleFunc("POST /v1/sandboxes/{id}/snapshot", s.snapshot)
+	s.mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.fork)
 	return s
 }
 
@@ -90,6 +92,37 @@ func (s *Server) exec(w http.ResponseWriter, r *http.Request) {
 		"stdout":    stdout.String(),
 		"stderr":    stderr.String(),
 	})
+}
+
+type snapshotReq struct {
+	Path string `json:"path"`
+}
+
+func (s *Server) snapshot(w http.ResponseWriter, r *http.Request) {
+	var req snapshotReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
+		http.Error(w, "bad snapshot request: path required", http.StatusBadRequest)
+		return
+	}
+	if err := s.mgr.Snapshot(r.Context(), r.PathValue("id"), req.Path); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"snapshot": req.Path})
+}
+
+func (s *Server) fork(w http.ResponseWriter, r *http.Request) {
+	var req snapshotReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
+		http.Error(w, "bad fork request: path required", http.StatusBadRequest)
+		return
+	}
+	clone, err := s.mgr.Fork(r.Context(), r.PathValue("id"), req.Path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"id": clone.ID(), "state": string(clone.State())})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

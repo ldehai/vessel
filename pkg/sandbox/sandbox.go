@@ -52,20 +52,32 @@ type Driver interface {
 	Create(ctx context.Context, spec *Spec) (Instance, error)
 }
 
+// Restorer is implemented by drivers that can restore an instance from a
+// snapshot. Fork = Snapshot + Restore; this is vessel's core primitive
+// for agent workloads (template sandbox -> N cheap session clones).
+type Restorer interface {
+	Restore(ctx context.Context, snapshotPath string) (Instance, error)
+}
+
 // ErrNotSupported is returned for capabilities a driver does not implement.
 var ErrNotSupported = errors.New("operation not supported by this driver")
+
+type entry struct {
+	inst   Instance
+	driver Driver
+}
 
 // Manager tracks live sandboxes across drivers.
 type Manager struct {
 	mu        sync.RWMutex
 	drivers   map[string]Driver
-	instances map[string]Instance
+	instances map[string]entry
 }
 
 func NewManager() *Manager {
 	return &Manager{
 		drivers:   map[string]Driver{},
-		instances: map[string]Instance{},
+		instances: map[string]entry{},
 	}
 }
 
@@ -97,27 +109,67 @@ func (m *Manager) Create(ctx context.Context, driver string, spec *Spec) (Instan
 	if err != nil {
 		return nil, err
 	}
-	m.mu.Lock()
-	m.instances[inst.ID()] = inst
-	m.mu.Unlock()
+	m.track(inst, d)
 	return inst, nil
+}
+
+func (m *Manager) track(inst Instance, d Driver) {
+	m.mu.Lock()
+	m.instances[inst.ID()] = entry{inst: inst, driver: d}
+	m.mu.Unlock()
 }
 
 func (m *Manager) Get(id string) (Instance, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	inst, ok := m.instances[id]
-	return inst, ok
+	e, ok := m.instances[id]
+	return e.inst, ok
 }
 
 func (m *Manager) List() []Instance {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	out := make([]Instance, 0, len(m.instances))
-	for _, i := range m.instances {
-		out = append(out, i)
+	for _, e := range m.instances {
+		out = append(out, e.inst)
 	}
 	return out
+}
+
+// Snapshot persists sandbox id to path.
+func (m *Manager) Snapshot(ctx context.Context, id, path string) error {
+	m.mu.RLock()
+	e, ok := m.instances[id]
+	m.mu.RUnlock()
+	if !ok {
+		return errors.New("unknown sandbox: " + id)
+	}
+	return e.inst.Snapshot(ctx, path)
+}
+
+// Fork snapshots sandbox id into dir and restores a new instance from it.
+// The source sandbox keeps running; the clone starts from the exact same
+// memory/filesystem state.
+func (m *Manager) Fork(ctx context.Context, id, dir string) (Instance, error) {
+	m.mu.RLock()
+	e, ok := m.instances[id]
+	m.mu.RUnlock()
+	if !ok {
+		return nil, errors.New("unknown sandbox: " + id)
+	}
+	r, ok := e.driver.(Restorer)
+	if !ok {
+		return nil, ErrNotSupported
+	}
+	if err := e.inst.Snapshot(ctx, dir); err != nil {
+		return nil, err
+	}
+	clone, err := r.Restore(ctx, dir)
+	if err != nil {
+		return nil, err
+	}
+	m.track(clone, e.driver)
+	return clone, nil
 }
 
 // NewID returns a random 12-hex-char sandbox ID.

@@ -24,12 +24,24 @@ func (f *FakeDriver) Create(_ context.Context, spec *Spec) (Instance, error) {
 	return &FakeInstance{id: NewID(), spec: spec, drv: f, state: StateRunning}, nil
 }
 
-type FakeInstance struct {
-	id    string
-	spec  *Spec
-	drv   *FakeDriver
-	state State
+// Restore implements Restorer: returns a fresh instance "from" the snapshot.
+func (f *FakeDriver) Restore(_ context.Context, path string) (Instance, error) {
+	if _, ok := f.Snapshots[path]; !ok {
+		return nil, ErrNotSupported
+	}
+	return &FakeInstance{id: NewID(), drv: f, state: StateRunning, restoredFrom: path}, nil
 }
+
+type FakeInstance struct {
+	id           string
+	spec         *Spec
+	drv          *FakeDriver
+	state        State
+	restoredFrom string
+}
+
+// RestoredFrom reports the snapshot path this instance was forked from.
+func (f *FakeInstance) RestoredFrom() string { return f.restoredFrom }
 
 func (f *FakeInstance) ID() string   { return f.id }
 func (f *FakeInstance) State() State { return f.state }

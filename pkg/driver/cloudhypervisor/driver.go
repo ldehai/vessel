@@ -87,6 +87,68 @@ func (d *Driver) Create(ctx context.Context, spec *sandbox.Spec) (sandbox.Instan
 	return inst, nil
 }
 
+// Restore spawns a fresh cloud-hypervisor process and restores VM state
+// from a snapshot directory produced by Snapshot. This is the fast path
+// behind Manager.Fork: restoring a prewarmed template skips kernel boot
+// entirely, which is how cold starts get under 100ms.
+//
+// Note: CH restores the vsock device with the host socket path recorded
+// in the snapshot, so the restored VM listens on the snapshot directory's
+// vsock.sock — we reconnect the agent there. Multi-fork from one snapshot
+// will need per-clone socket remapping (tracked for M3 follow-up).
+func (d *Driver) Restore(ctx context.Context, snapshotPath string) (sandbox.Instance, error) {
+	id := sandbox.NewID()
+	dir := filepath.Join(d.cfg.StateDir, id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	apiSock := filepath.Join(dir, "api.sock")
+
+	cmd := exec.Command(d.cfg.BinaryPath, "--api-socket", apiSock)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start cloud-hypervisor: %w", err)
+	}
+
+	inst := &Instance{
+		id:     id,
+		dir:    dir,
+		vsock:  filepath.Join(snapshotPath, "vsock.sock"),
+		api:    NewAPIClient(apiSock),
+		vmm:    cmd,
+		state:  sandbox.StateCreated,
+		cfgDrv: d.cfg,
+	}
+	fail := func(err error) (sandbox.Instance, error) {
+		_ = inst.Stop(context.Background())
+		return nil, err
+	}
+
+	if err := inst.waitFor(ctx, func() error { return inst.api.Ping(ctx) }); err != nil {
+		return fail(fmt.Errorf("VMM API not ready: %w", err))
+	}
+	if err := inst.api.RestoreVM(ctx, "file://"+snapshotPath); err != nil {
+		return fail(fmt.Errorf("restore: %w", err))
+	}
+	if err := inst.api.ResumeVM(ctx); err != nil {
+		return fail(fmt.Errorf("resume: %w", err))
+	}
+	var conn io.ReadWriteCloser
+	if err := inst.waitFor(ctx, func() error {
+		c, err := DialHybridVsock(inst.vsock, agentVsockPort, time.Second)
+		if err != nil {
+			return err
+		}
+		conn = c
+		return nil
+	}); err != nil {
+		return fail(fmt.Errorf("guest agent not reachable after restore: %w", err))
+	}
+	inst.agent = agent.NewClient(conn)
+	inst.state = sandbox.StateRunning
+	return inst, nil
+}
+
 type Instance struct {
 	id     string
 	dir    string

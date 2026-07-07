@@ -69,6 +69,39 @@ func TestExecNotFound(t *testing.T) {
 	}
 }
 
+func TestSnapshotAndForkEndpoints(t *testing.T) {
+	ts, _ := newTestServer(t)
+
+	resp, _ := http.Post(ts.URL+"/v1/sandboxes", "application/json",
+		strings.NewReader(`{"driver":"fake","spec":{}}`))
+	var created struct{ ID string }
+	_ = json.NewDecoder(resp.Body).Decode(&created)
+
+	resp, err := http.Post(ts.URL+"/v1/sandboxes/"+created.ID+"/snapshot",
+		"application/json", strings.NewReader(`{"path":"/snap/x"}`))
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("snapshot: %d %v", resp.StatusCode, err)
+	}
+
+	resp, err = http.Post(ts.URL+"/v1/sandboxes/"+created.ID+"/fork",
+		"application/json", strings.NewReader(`{"path":"/snap/y"}`))
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("fork: %d %v", resp.StatusCode, err)
+	}
+	var clone struct{ ID, State string }
+	_ = json.NewDecoder(resp.Body).Decode(&clone)
+	if clone.ID == "" || clone.ID == created.ID || clone.State != "running" {
+		t.Fatalf("clone: %+v", clone)
+	}
+
+	// missing path -> 400
+	resp, _ = http.Post(ts.URL+"/v1/sandboxes/"+created.ID+"/fork",
+		"application/json", strings.NewReader(`{}`))
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("fork without path: %d, want 400", resp.StatusCode)
+	}
+}
+
 func TestCreateDefaultsDriver(t *testing.T) {
 	ts, _ := newTestServer(t)
 	// no driver field -> defaults to "process", which is not registered here
