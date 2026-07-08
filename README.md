@@ -73,15 +73,19 @@ go test ./...
 
 ## 实测数据（2026-07，Ubuntu 24.04 x86_64 / KVM / CH v45）
 
-| 路径 | 128MiB 模板 | 256MiB 模板 | 说明 |
-|---|---|---|---|
-| 完整启动（boot + 握手 + exec） | 524ms | 529ms | 与 Kata 同量级 |
-| fork（每次 snapshot+restore + exec） | 122ms | 224ms | 快照写盘占大头 |
-| **restore-only（模板缓存 + VMM 池，会话主路径）** | **79ms ±0.5ms** | 137ms | **已达 <100ms 目标** |
+256MiB 模板，n=10，avg（CH v52，OnDemand restore）：
 
-n=10，avg。restore 延迟与模板内存线性相关（Δ58ms/128MB ≈ NVMe 读速），
-即当前瓶颈纯粹是快照内存文件读取。v0.2 计划用按需缺页 + 页缓存共享把恢复
-成本与内存大小解耦；在那之前，128MiB 模板是 Agent 场景的推荐配置。
+| 路径 | v0.1 (Copy) | **v0.2 (OnDemand)** | 说明 |
+|---|---|---|---|
+| 完整启动（boot + 握手 + exec） | 529ms | 521ms | 与 Kata 同量级 |
+| fork（snapshot+restore + exec） | 224ms | **86ms** | OnDemand + 自动 resume |
+| restore-only（会话主路径） | 137ms | **70ms（best 58ms）** | 与模板内存解耦 |
+| **并发 10 clone 全部就绪** | 不支持 | **173ms（17ms/clone）** | per-clone 快照覆盖层 |
+
+v0.1 时 restore 延迟随模板内存线性增长（纯内存文件读取）；v0.2 用
+CH v52 的 userfaultfd 按需缺页解耦了两者——256MiB 模板与 128MiB 同样快，
+页面在首次访问时才载入。并发 clone 靠硬链接快照覆盖层 + per-clone vsock
+路径实现，10 路并发摊薄到 17ms/clone。
 
 ## 路线图
 
