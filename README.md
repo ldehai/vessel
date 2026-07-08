@@ -124,6 +124,7 @@ CH v52 的 userfaultfd 按需缺页解耦了两者——256MiB 模板与 128MiB 
   pod 注解 `vessel.dev/template` 走恢复路径（未注册模板 fail-fast）、
   **containerd 启停握手 + TaskExit 事件发布已完成并通过真机验收**
   （2026-07 Ubuntu 24.04：`scripts/ctr-e2e.sh` 中真 containerd 拉起 shim、
-  ctr run→RUNNING→kill→STOPPED→rm 全链路通过）。剩：OCI rootfs→virtio-blk、
-  CNI 桥接、真集群 e2e（见 docs/kubernetes.md）
+  ctr run→RUNNING→kill→STOPPED→rm 全链路通过）。**OCI rootfs→块镜像转换
+  已完成**（`pkg/image`：erofs 优先、ext4 兜底，CH 驱动 boot 时自动打包）。
+  剩：CNI 桥接、真集群 e2e（见 docs/kubernetes.md）
 - [ ] E2B envd 数据面 gRPC 兼容、erofs 镜像分层

@@ -127,4 +127,30 @@ bash "$REPO/bench/coldstart.sh" -u http://localhost:7070 -d cloudhypervisor -n 1
 step "8. shim test suite under race detector"
 (cd "$REPO" && go test -race -count=1 ./pkg/shim/) || die "shim tests"
 
+step "9. rootfs->block-image microVM (a directory rootfs booted as a VM)"
+# Unpack the prebuilt rootfs image into a directory, then create a sandbox
+# with that DIRECTORY as rootfs. The CH driver must pack it into a block
+# image and boot it — the real path a containerd bundle rootfs takes.
+ROOTDIR="$WORK/bundle-rootfs"
+rm -rf "$ROOTDIR"; mkdir -p "$ROOTDIR"
+# rootfs.img was built in step 3; mount read-only to copy its tree out.
+MNT=$(mktemp -d)
+if mount -o loop,ro "$WORK/rootfs.img" "$MNT" 2>/dev/null; then
+  cp -a "$MNT"/. "$ROOTDIR"/ 2>/dev/null || true
+  umount "$MNT"
+  rmdir "$MNT"
+  HTTP=$(curl -sS -w '%{http_code}' -o dir.json -X POST localhost:7070/v1/sandboxes \
+    -d "{\"driver\":\"cloudhypervisor\",\"spec\":{\"Rootfs\":\"$ROOTDIR\"}}")
+  echo "dir-rootfs create HTTP $HTTP: $(cat dir.json)"
+  [ "$HTTP" = 200 ] || { dump_logs; die "directory-rootfs microVM (HTTP $HTTP)"; }
+  DID=$(sed -E 's/.*"id":"([^"]+)".*/\1/' dir.json)
+  curl -fsS -X POST "localhost:7070/v1/sandboxes/$DID/exec" \
+    -d '{"cmd":["sh","-c","echo packed-rootfs-ok"]}' | grep -q packed-rootfs-ok \
+    || { dump_logs; die "exec in directory-rootfs microVM"; }
+  echo "directory rootfs -> block image -> booted microVM -> exec OK"
+else
+  echo "(skip: loop mount unavailable; pkg/image unit tests still cover packing)"
+  rmdir "$MNT" 2>/dev/null || true
+fi
+
 step "ALL PASSED"

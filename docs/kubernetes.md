@@ -79,14 +79,16 @@ engine, three front doors (K8s, native REST, E2B).
   restores were configured.
 - **Real-containerd e2e**: `sudo ./scripts/ctr-e2e.sh` has containerd
   itself spawn the shim and drive run/kill/rm via `ctr`.
+- **OCI rootfs → block image** (`pkg/image`): the CH driver packs the
+  bundle's rootfs directory into a virtio-blk image on boot — mkfs.erofs
+  when available (read-only, dedup, page-cache shared across VMs), else
+  mkfs.ext4 -d (no root). A rootfs that is already a file (the configured
+  default image, or a restored template) is used as-is. This is what lets
+  a containerd task actually become a microVM rather than a process
+  sandbox.
 
 ## What's next
 
-- OCI rootfs → virtio-blk image conversion for the CH driver (pairs with
-  erofs layering). Today the process driver consumes the bundle rootfs
-  directly; the CH driver needs a block image. Until this lands, the shim
-  does not execute the container's OCI command — `ctr run` validates
-  lifecycle, not workload execution.
 - Pod networking: bridge the CNI netns into the VM (Kata's tc-mirror /
   vhost-net approach).
 - Real-cluster e2e: `kubectl run` a template-annotated pod, `kubectl exec`

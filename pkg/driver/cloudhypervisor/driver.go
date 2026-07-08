@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ldehai/vessel/pkg/agent"
+	"github.com/ldehai/vessel/pkg/image"
 	"github.com/ldehai/vessel/pkg/sandbox"
 )
 
@@ -189,6 +190,19 @@ func (i *Instance) boot(ctx context.Context, spec *sandbox.Spec) error {
 	rootfs := spec.Rootfs
 	if rootfs == "" {
 		rootfs = i.cfgDrv.RootfsPath
+	}
+	// containerd hands rootfs as a directory; a microVM needs a block image.
+	// Pack it once per instance (erofs if available, else ext4). A rootfs
+	// that is already a file (the configured default image, or a template)
+	// is used as-is.
+	if rootfs != "" {
+		if info, err := os.Stat(rootfs); err == nil && info.IsDir() {
+			res, err := image.PackDir(rootfs, filepath.Join(i.dir, "rootfs.img"), image.Options{})
+			if err != nil {
+				return fmt.Errorf("pack rootfs %s: %w", rootfs, err)
+			}
+			rootfs = res.Path
+		}
 	}
 	vcpus, mem := spec.VCPUs, spec.MemMiB
 	if vcpus == 0 {
