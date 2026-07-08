@@ -25,18 +25,29 @@ command -v go >/dev/null || die "go toolchain not installed"
 uname -a
 
 step "1. cloud-hypervisor binary"
+# Kill leftovers from previous runs first: a running cloud-hypervisor keeps
+# its binary busy (ETXTBSY) and stale VMs hold /tmp/vessel-ch sockets.
+pkill -f 'vessel serve' 2>/dev/null
+pkill -f 'cloud-hypervisor --api-socket /tmp/vessel-ch' 2>/dev/null
+sleep 0.5
+
 if ! command -v cloud-hypervisor >/dev/null; then
-  ARCH=$(uname -m)
-  case $ARCH in
-    x86_64)  CH_ASSET=cloud-hypervisor-static ;;
-    aarch64) CH_ASSET=cloud-hypervisor-static-aarch64 ;;
-    *) die "unsupported arch $ARCH" ;;
-  esac
-  echo "downloading cloud-hypervisor v45.0..."
-  curl -fsSL -o cloud-hypervisor \
-    "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v45.0/${CH_ASSET}" \
-    || die "download failed; install manually and put on PATH"
-  chmod +x cloud-hypervisor
+  if [ ! -x "$WORK/cloud-hypervisor" ]; then
+    ARCH=$(uname -m)
+    case $ARCH in
+      x86_64)  CH_ASSET=cloud-hypervisor-static ;;
+      aarch64) CH_ASSET=cloud-hypervisor-static-aarch64 ;;
+      *) die "unsupported arch $ARCH" ;;
+    esac
+    echo "downloading cloud-hypervisor v45.0..."
+    curl -fsSL -o cloud-hypervisor.tmp \
+      "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v45.0/${CH_ASSET}" \
+      || die "download failed; install manually and put on PATH"
+    chmod +x cloud-hypervisor.tmp
+    mv -f cloud-hypervisor.tmp cloud-hypervisor   # atomic; never writes a busy binary
+  else
+    echo "reusing existing $WORK/cloud-hypervisor"
+  fi
   export PATH="$WORK:$PATH"
 fi
 cloud-hypervisor --version
@@ -55,7 +66,9 @@ bash "$REPO/images/build-rootfs.sh" -o rootfs.img || die "rootfs"
 ls -lh vmlinux rootfs.img
 
 step "4. start daemon"
-pkill -f 'vessel serve' 2>/dev/null; sleep 0.5
+pkill -f 'vessel serve' 2>/dev/null
+pkill -f 'cloud-hypervisor --api-socket /tmp/vessel-ch' 2>/dev/null
+sleep 0.5
 rm -rf /tmp/vessel-ch   # clear stale instance dirs so log dumps are current
 VESSEL_KERNEL="$WORK/vmlinux" VESSEL_ROOTFS="$WORK/rootfs.img" \
   ./vessel serve -addr :7070 > daemon.log 2>&1 &
