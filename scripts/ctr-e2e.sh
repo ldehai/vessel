@@ -53,7 +53,8 @@ step "2. pull image"
 ctr image pull "$IMAGE" >/dev/null || die "image pull"
 
 step "3. run task via the vessel runtime (detached)"
-ctr run --rm -d --runtime "$RUNTIME" "$IMAGE" "$TASK" || die "ctr run"
+# no --rm: it conflicts with -d on some ctr versions; cleanup is explicit below
+ctr run -d --runtime "$RUNTIME" "$IMAGE" "$TASK" || die "ctr run"
 trap 'ctr task kill -s KILL "$TASK" 2>/dev/null; ctr container rm "$TASK" 2>/dev/null' EXIT
 
 step "4. containerd sees the task RUNNING"
