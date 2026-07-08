@@ -21,12 +21,18 @@ import (
 )
 
 func main() {
-	mgr := sandbox.NewManager()
-	mgr.RegisterDriver(process.New())
-	mgr.RegisterDriver(cloudhypervisor.New(cloudhypervisor.Config{
+	poolSize := 2
+	if v := os.Getenv("VESSEL_POOL"); v != "" {
+		fmt.Sscanf(v, "%d", &poolSize)
+	}
+	chDrv := cloudhypervisor.New(cloudhypervisor.Config{
 		KernelPath: os.Getenv("VESSEL_KERNEL"),
 		RootfsPath: os.Getenv("VESSEL_ROOTFS"),
-	}))
+		PoolSize:   poolSize,
+	})
+	mgr := sandbox.NewManager()
+	mgr.RegisterDriver(process.New())
+	mgr.RegisterDriver(chDrv)
 
 	if len(os.Args) < 2 {
 		usage()
@@ -37,6 +43,7 @@ func main() {
 	case "run":
 		os.Exit(cmdRun(mgr, os.Args[2:]))
 	case "serve":
+		chDrv.Warm() // prewarm the VMM pool for low-latency create/restore
 		os.Exit(cmdServe(mgr, os.Args[2:]))
 	case "info":
 		fmt.Println("drivers:", mgr.Drivers())

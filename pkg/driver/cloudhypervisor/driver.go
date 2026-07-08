@@ -27,6 +27,7 @@ type Config struct {
 	StateDir   string        // per-sandbox sockets and snapshots
 	Cmdline    string        // kernel cmdline (default provided)
 	BootWait   time.Duration // max wait for API socket + agent (default 10s)
+	PoolSize   int           // prewarmed VMM processes (0 = spawn per request)
 }
 
 func (c *Config) withDefaults() Config {
@@ -49,35 +50,38 @@ func (c *Config) withDefaults() Config {
 }
 
 type Driver struct {
-	cfg Config
+	cfg  Config
+	pool *vmmPool
 }
 
-func New(cfg Config) *Driver { return &Driver{cfg: cfg.withDefaults()} }
+func New(cfg Config) *Driver {
+	c := cfg.withDefaults()
+	return &Driver{
+		cfg:  c,
+		pool: newVMMPool(c.BinaryPath, c.StateDir, c.PoolSize, c.BootWait),
+	}
+}
 
 func (d *Driver) Name() string { return "cloudhypervisor" }
 
-// Create spawns a cloud-hypervisor process, boots a microVM and waits for
-// the in-guest vessel-agent to answer over hybrid vsock.
-func (d *Driver) Create(ctx context.Context, spec *sandbox.Spec) (sandbox.Instance, error) {
-	id := sandbox.NewID()
-	dir := filepath.Join(d.cfg.StateDir, id)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
-	}
-	apiSock := filepath.Join(dir, "api.sock")
-	vsockSock := filepath.Join(dir, "vsock.sock")
+// Warm pre-spawns PoolSize VMM processes in the background. Call once at
+// daemon startup; one-shot CLI use can skip it.
+func (d *Driver) Warm() { d.pool.kickRefill() }
 
-	cmd, err := startVMM(d.cfg.BinaryPath, apiSock, dir)
+// Create takes a ready VMM (prewarmed or freshly spawned), boots a microVM
+// and waits for the in-guest vessel-agent to answer over hybrid vsock.
+func (d *Driver) Create(ctx context.Context, spec *sandbox.Spec) (sandbox.Instance, error) {
+	h, err := d.pool.get(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	inst := &Instance{
-		id:     id,
-		dir:    dir,
-		vsock:  vsockSock,
-		api:    NewAPIClient(apiSock),
-		vmm:    cmd,
+		id:     h.id,
+		dir:    h.dir,
+		vsock:  filepath.Join(h.dir, "vsock.sock"),
+		api:    h.api,
+		vmm:    h.cmd,
 		state:  sandbox.StateCreated,
 		cfgDrv: d.cfg,
 	}
@@ -101,27 +105,20 @@ func (d *Driver) Create(ctx context.Context, spec *sandbox.Spec) (sandbox.Instan
 // working on their open fds; only NEW dials on that path reach the clone.
 // Proper per-clone socket remapping is tracked for M4.
 func (d *Driver) Restore(ctx context.Context, snapshotPath string) (sandbox.Instance, error) {
-	id := sandbox.NewID()
-	dir := filepath.Join(d.cfg.StateDir, id)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
-	}
-	apiSock := filepath.Join(dir, "api.sock")
-
 	vsockPath := snapshotVsockPath(snapshotPath)
 	_ = os.Remove(vsockPath) // free the path for the restored VMM's listener
 
-	cmd, err := startVMM(d.cfg.BinaryPath, apiSock, dir)
+	h, err := d.pool.get(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	inst := &Instance{
-		id:     id,
-		dir:    dir,
+		id:     h.id,
+		dir:    h.dir,
 		vsock:  vsockPath,
-		api:    NewAPIClient(apiSock),
-		vmm:    cmd,
+		api:    h.api,
+		vmm:    h.cmd,
 		state:  sandbox.StateCreated,
 		cfgDrv: d.cfg,
 	}
@@ -130,9 +127,6 @@ func (d *Driver) Restore(ctx context.Context, snapshotPath string) (sandbox.Inst
 		return nil, err
 	}
 
-	if err := inst.waitFor(ctx, func() error { return inst.api.Ping(ctx) }); err != nil {
-		return fail(fmt.Errorf("VMM API not ready: %w", err))
-	}
 	if err := inst.api.RestoreVM(ctx, "file://"+snapshotPath); err != nil {
 		return fail(fmt.Errorf("restore: %w", err))
 	}
@@ -327,17 +321,5 @@ func startVMM(binary, apiSock, dir string) (*exec.Cmd, error) {
 
 // waitFor polls fn until success, ctx cancellation, or BootWait elapses.
 func (i *Instance) waitFor(ctx context.Context, fn func() error) error {
-	deadline := time.Now().Add(i.cfgDrv.BootWait)
-	var lastErr error
-	for time.Now().Before(deadline) {
-		if lastErr = fn(); lastErr == nil {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(5 * time.Millisecond):
-		}
-	}
-	return lastErr
+	return waitReady(ctx, i.cfgDrv.BootWait, fn)
 }
