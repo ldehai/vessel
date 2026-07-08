@@ -45,16 +45,18 @@ step "2. build vessel"
 (cd "$REPO" && go build -o "$WORK/vessel" ./cmd/vessel) || die "go build"
 
 step "3. guest images"
-if [ "$SKIP_IMAGES" = 1 ] && [ -f vmlinux ] && [ -f rootfs.img ]; then
-  echo "reusing existing vmlinux/rootfs.img"
+if [ "$SKIP_IMAGES" = 1 ] && [ -f vmlinux ]; then
+  echo "reusing existing vmlinux"
 else
   bash "$REPO/images/build-kernel.sh" -o vmlinux || die "kernel"
-  bash "$REPO/images/build-rootfs.sh" -o rootfs.img || die "rootfs"
 fi
+# rootfs embeds vessel-agent, which changes with the source: always rebuild.
+bash "$REPO/images/build-rootfs.sh" -o rootfs.img || die "rootfs"
 ls -lh vmlinux rootfs.img
 
 step "4. start daemon"
 pkill -f 'vessel serve' 2>/dev/null; sleep 0.5
+rm -rf /tmp/vessel-ch   # clear stale instance dirs so log dumps are current
 VESSEL_KERNEL="$WORK/vmlinux" VESSEL_ROOTFS="$WORK/rootfs.img" \
   ./vessel serve -addr :7070 > daemon.log 2>&1 &
 DAEMON=$!
