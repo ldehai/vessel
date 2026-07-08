@@ -31,6 +31,13 @@ pkill -f 'vessel serve' 2>/dev/null
 pkill -f 'cloud-hypervisor --api-socket /tmp/vessel-ch' 2>/dev/null
 sleep 0.5
 
+CH_VERSION=${CH_VERSION:-v52.0}
+# Drop a cached binary that doesn't match the pinned version.
+if [ -x "$WORK/cloud-hypervisor" ] && ! "$WORK/cloud-hypervisor" --version 2>/dev/null | grep -q "${CH_VERSION#v}"; then
+  echo "cached cloud-hypervisor is not $CH_VERSION; refreshing"
+  rm -f "$WORK/cloud-hypervisor"
+fi
+
 if ! command -v cloud-hypervisor >/dev/null; then
   if [ ! -x "$WORK/cloud-hypervisor" ]; then
     ARCH=$(uname -m)
@@ -39,9 +46,9 @@ if ! command -v cloud-hypervisor >/dev/null; then
       aarch64) CH_ASSET=cloud-hypervisor-static-aarch64 ;;
       *) die "unsupported arch $ARCH" ;;
     esac
-    echo "downloading cloud-hypervisor v45.0..."
+    echo "downloading cloud-hypervisor ${CH_VERSION}..."   # v52+ needed for OnDemand restore
     curl -fsSL -o cloud-hypervisor.tmp \
-      "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v45.0/${CH_ASSET}" \
+      "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CH_VERSION}/${CH_ASSET}" \
       || die "download failed; install manually and put on PATH"
     chmod +x cloud-hypervisor.tmp
     mv -f cloud-hypervisor.tmp cloud-hypervisor   # atomic; never writes a busy binary

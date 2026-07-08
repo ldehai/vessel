@@ -78,11 +78,23 @@ if [ -n "$TEMPLATE" ]; then
     || echo "(fork benchmark failed; driver may not support Restore)"
 
   # Hot path: template snapshotted ONCE, then restore-only per session.
-  # NOTE: restores share the template's recorded vsock path; each new clone
-  # takes it over. Serial restore->exec like this bench is fine.
+  # Each clone gets its own vsock path (per-clone snapshot overlay).
   curl -fsS -X POST "$URL/v1/sandboxes/$TEMPLATE/snapshot" \
     -d "{\"path\":\"$FORK_DIR/tpl\"}" >/dev/null \
     && bench "hot start: restore-only from cached snapshot (-> exec)" restore_iter \
     || echo "(restore benchmark failed)"
+
+  # Concurrency: N clones restored from one template in parallel.
+  echo "concurrent restore: $N clones in parallel"
+  t0=$(date +%s%N)
+  for i in $(seq 1 "$N"); do restore_iter & done
+  FAIL=0; for j in $(jobs -p); do wait "$j" || FAIL=1; done
+  t1=$(date +%s%N)
+  if [ "$FAIL" = 0 ]; then
+    ms=$(( (t1 - t0) / 1000000 ))
+    printf "  %d clones ready in %d ms total (%d ms/clone effective)\n" "$N" "$ms" $((ms / N))
+  else
+    echo "  FAILED (check daemon.log)"
+  fi
 fi
 rm -rf "$FORK_DIR"
