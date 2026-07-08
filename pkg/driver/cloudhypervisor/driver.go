@@ -241,8 +241,12 @@ func (i *Instance) Exec(ctx context.Context, cmd []string, stdout, stderr io.Wri
 
 // Snapshot pauses the VM, snapshots full state to path (a directory), and
 // resumes. The result can seed Restore/fork on any host with the same CH
-// version.
+// version. The destination is replaced: CH refuses to overwrite existing
+// snapshot files ("File exists"), so stale contents are cleared first.
 func (i *Instance) Snapshot(ctx context.Context, path string) error {
+	if err := os.RemoveAll(path); err != nil {
+		return fmt.Errorf("clear snapshot dir: %w", err)
+	}
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return err
 	}
