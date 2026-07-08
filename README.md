@@ -76,11 +76,13 @@ go test ./...
 | 路径 | avg | best | 说明 |
 |---|---|---|---|
 | 完整启动（boot + 握手 + exec） | 529ms | 524ms | 与 Kata 同量级 |
-| fork（每次 snapshot+restore + exec） | 230ms | 210ms | 快照写盘占大头 |
-| **restore-only（模板快照缓存，仅恢复 + exec）** | **143ms** | **142ms** | 方差 ±1ms，Agent 会话主路径 |
+| fork（每次 snapshot+restore + exec） | 224ms | 204ms | 快照写盘占大头 |
+| **restore-only（模板快照缓存 + VMM 预启动池）** | **137ms** | **137ms** | 方差 ±0.5ms，Agent 会话主路径 |
 
-n=10。距 <100ms 目标还差 43ms，下一步：CH 进程预启动池（省 spawn+ping）、
-restore 内存按需缺页（no prefault）、exec 往返合并进恢复流程。
+n=10，模板内存 256MiB。VMM 池只贡献了 ~6ms——CH spawn 本身很快。剩余成本
+主要是快照内存文件的读取（256MB ≈ 120ms+ 磁盘读），与模板内存线性相关：
+`MEM=128 bench/coldstart.sh` 可验证。下一步：restore 内存按需缺页/页缓存共享，
+让恢复成本与内存大小解耦。
 
 ## 路线图
 

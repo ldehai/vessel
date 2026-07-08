@@ -67,8 +67,12 @@ restore_iter() {
 }
 
 # Fork path: clone a prewarmed template (snapshot + restore, no kernel boot).
+# MEM env overrides template memory (MiB, default 256): restore latency is
+# dominated by reading the snapshot memory file, so it scales with this.
+MEM=${MEM:-256}
 TEMPLATE=$(curl -fsS -X POST "$URL/v1/sandboxes" \
-  -d "{\"driver\":\"$DRIVER\",\"spec\":{}}" | sed -E 's/.*"id":"([^"]+)".*/\1/')
+  -d "{\"driver\":\"$DRIVER\",\"spec\":{\"MemMiB\":$MEM}}" | sed -E 's/.*"id":"([^"]+)".*/\1/')
+echo "(template memory: ${MEM}MiB)"
 if [ -n "$TEMPLATE" ]; then
   bench "warm start: fork (snapshot+restore -> exec)" fork_iter \
     || echo "(fork benchmark failed; driver may not support Restore)"
