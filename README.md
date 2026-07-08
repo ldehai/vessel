@@ -75,12 +75,12 @@ go test ./...
 
 | 路径 | avg | best | 说明 |
 |---|---|---|---|
-| 完整启动（boot + 握手 + exec） | 589ms | 567ms | 与 Kata 同量级 |
-| fork（每次 snapshot+restore + exec） | 286ms | 257ms | 快照写盘占大头 |
-| restore-only（模板快照缓存，仅恢复 + exec） | 待测 | 待测 | <100ms 目标主赛道 |
+| 完整启动（boot + 握手 + exec） | 529ms | 524ms | 与 Kata 同量级 |
+| fork（每次 snapshot+restore + exec） | 230ms | 210ms | 快照写盘占大头 |
+| **restore-only（模板快照缓存，仅恢复 + exec）** | **143ms** | **142ms** | 方差 ±1ms，Agent 会话主路径 |
 
-n=10。下一步优化：restore 内存按需加载（CH file-backed + no prefault）、
-去掉恢复后的轮询延迟（waitFor 间隔 50ms 有量化误差）。
+n=10。距 <100ms 目标还差 43ms，下一步：CH 进程预启动池（省 spawn+ping）、
+restore 内存按需缺页（no prefault）、exec 往返合并进恢复流程。
 
 ## 路线图
 
