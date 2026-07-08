@@ -62,16 +62,25 @@ trap 'kill $DAEMON 2>/dev/null' EXIT
 sleep 1
 curl -fsS localhost:7070/healthz >/dev/null || { cat daemon.log; die "daemon not healthy"; }
 
+dump_logs() {
+  echo "--- daemon.log ---"; cat daemon.log 2>/dev/null
+  for d in /tmp/vessel-ch/*/; do
+    echo "--- $d vmm.log ---";    tail -30 "$d/vmm.log" 2>/dev/null
+    echo "--- $d serial.log ---"; tail -40 "$d/serial.log" 2>/dev/null
+  done
+}
+
 step "5. e2e: create microVM + exec"
-CREATE=$(curl -fsS -X POST localhost:7070/v1/sandboxes \
-  -d '{"driver":"cloudhypervisor","spec":{}}') || { cat daemon.log; die "create sandbox"; }
-echo "created: $CREATE"
-ID=$(echo "$CREATE" | sed -E 's/.*"id":"([^"]+)".*/\1/')
+HTTP=$(curl -sS -w '%{http_code}' -o create.json -X POST localhost:7070/v1/sandboxes \
+  -d '{"driver":"cloudhypervisor","spec":{}}')
+echo "HTTP $HTTP: $(cat create.json)"
+[ "$HTTP" = 200 ] || { dump_logs; die "create sandbox (HTTP $HTTP)"; }
+ID=$(sed -E 's/.*"id":"([^"]+)".*/\1/' create.json)
 
 EXEC=$(curl -fsS -X POST "localhost:7070/v1/sandboxes/$ID/exec" \
-  -d '{"cmd":["sh","-c","echo guest-ok $(uname -r) pid=$$"]}') || die "exec"
+  -d '{"cmd":["sh","-c","echo guest-ok $(uname -r) pid=$$"]}') || { dump_logs; die "exec"; }
 echo "exec: $EXEC"
-echo "$EXEC" | grep -q guest-ok || die "unexpected exec output"
+echo "$EXEC" | grep -q guest-ok || { dump_logs; die "unexpected exec output"; }
 
 step "6. e2e: snapshot + fork"
 curl -fsS -X POST "localhost:7070/v1/sandboxes/$ID/snapshot" \

@@ -37,7 +37,9 @@ func (c *Config) withDefaults() Config {
 		out.StateDir = filepath.Join(os.TempDir(), "vessel-ch")
 	}
 	if out.Cmdline == "" {
-		out.Cmdline = "console=hvc0 root=/dev/vda ro init=/sbin/init"
+		// ttyS0 = x86_64 serial, ttyAMA0 = aarch64 pl011; the kernel keeps
+		// whichever exists. Serial output lands in <state>/serial.log.
+		out.Cmdline = "console=ttyS0 console=ttyAMA0 root=/dev/vda ro init=/sbin/init"
 	}
 	if out.BootWait == 0 {
 		out.BootWait = 10 * time.Second
@@ -64,10 +66,9 @@ func (d *Driver) Create(ctx context.Context, spec *sandbox.Spec) (sandbox.Instan
 	apiSock := filepath.Join(dir, "api.sock")
 	vsockSock := filepath.Join(dir, "vsock.sock")
 
-	cmd := exec.Command(d.cfg.BinaryPath, "--api-socket", apiSock)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start cloud-hypervisor: %w", err)
+	cmd, err := startVMM(d.cfg.BinaryPath, apiSock, dir)
+	if err != nil {
+		return nil, err
 	}
 
 	inst := &Instance{
@@ -104,10 +105,9 @@ func (d *Driver) Restore(ctx context.Context, snapshotPath string) (sandbox.Inst
 	}
 	apiSock := filepath.Join(dir, "api.sock")
 
-	cmd := exec.Command(d.cfg.BinaryPath, "--api-socket", apiSock)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start cloud-hypervisor: %w", err)
+	cmd, err := startVMM(d.cfg.BinaryPath, apiSock, dir)
+	if err != nil {
+		return nil, err
 	}
 
 	inst := &Instance{
@@ -185,7 +185,7 @@ func (i *Instance) boot(ctx context.Context, spec *sandbox.Spec) error {
 		Payload: PayloadConfig{Kernel: i.cfgDrv.KernelPath, Cmdline: i.cfgDrv.Cmdline},
 		Disks:   []DiskConfig{{Path: rootfs, Readonly: true}},
 		Vsock:   &VsockConfig{CID: guestCID, Socket: i.vsock},
-		Serial:  &ConsoleCfg{Mode: "Off"},
+		Serial:  &ConsoleCfg{Mode: "File", File: filepath.Join(i.dir, "serial.log")},
 		Console: &ConsoleCfg{Mode: "Off"},
 	}
 	if err := i.api.CreateVM(ctx, vmCfg); err != nil {
@@ -270,6 +270,22 @@ func (i *Instance) Stop(ctx context.Context) error {
 	}
 	i.state = sandbox.StateStopped
 	return nil
+}
+
+// startVMM launches cloud-hypervisor with its stdout/stderr captured to
+// <dir>/vmm.log so boot failures are diagnosable per instance.
+func startVMM(binary, apiSock, dir string) (*exec.Cmd, error) {
+	logf, err := os.Create(filepath.Join(dir, "vmm.log"))
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.Command(binary, "--api-socket", apiSock)
+	cmd.Stdout, cmd.Stderr = logf, logf
+	if err := cmd.Start(); err != nil {
+		logf.Close()
+		return nil, fmt.Errorf("start cloud-hypervisor (%s): %w", binary, err)
+	}
+	return cmd, nil
 }
 
 // waitFor polls fn until success, ctx cancellation, or BootWait elapses.
