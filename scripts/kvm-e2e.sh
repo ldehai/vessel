@@ -124,4 +124,7 @@ echo "clone exec HTTP $HTTP: $(cat clone-exec.json)"
 step "7. cold-start benchmark"
 bash "$REPO/bench/coldstart.sh" -u http://localhost:7070 -d cloudhypervisor -n 10
 
+step "8. shim test suite under race detector"
+(cd "$REPO" && go test -race -count=1 ./pkg/shim/) || die "shim tests"
+
 step "ALL PASSED"

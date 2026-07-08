@@ -120,6 +120,9 @@ CH v52 的 userfaultfd 按需缺页解耦了两者——256MiB 模板与 128MiB 
 - [x] v0.2 按需缺页恢复（内存解耦）+ 并发 clone + VMM 预启动池
 - [x] vessel up 一键引导（双架构、无 KVM 降级、二进制自嵌为 agent）
 - [x] E2B 兼容控制面（SDK drop-in 迁移）
-- [ ] v0.3 containerd shim v2 + K8s RuntimeClass（企业集群，竞品空档）
+- [~] v0.3 containerd shim v2 + K8s RuntimeClass（进行中）：Task service 映射到
+  Manager，pod 注解 `vessel.dev/template` 走恢复路径（未注册模板 fail-fast），
+  `-templates` 注册表，ttrpc 层由真 containerd Task 客户端往返测试并过 race
+  检测。剩：containerd 启停握手 + 事件发布、OCI rootfs→virtio-blk、CNI 桥接、
+  真集群 e2e（见 docs/kubernetes.md）
 - [ ] E2B envd 数据面 gRPC 兼容、erofs 镜像分层
-- [ ] M4 containerd shim v2 + K8s RuntimeClass，多 fork 的 vsock socket 重映射，发布 v0.1
