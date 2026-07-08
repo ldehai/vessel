@@ -39,6 +39,21 @@ cloud-hypervisor 和官方 guest 内核 → 用 Alpine + 自身二进制构建 r
 ./vessel serve -addr :7070                        # 只起 daemon（资产路径用环境变量）
 ```
 
+### E2B SDK 直接迁移
+
+daemon 同时提供 E2B 兼容的控制面 API（`/sandboxes`）。E2B SDK 用户改两个
+环境变量就能指向自托管的 vessel，业务代码零改动：
+
+```bash
+export E2B_API_URL="http://localhost:7070"
+export E2B_API_KEY="local"
+```
+
+templateID 映射：注册过的模板（`RegisterTemplate`）走 vessel 的快速恢复路径
+（<100ms）；`"base"` 或未知 templateID 则新建沙箱。当前覆盖 E2B **控制面**
+（创建/列表/kill，字段与状态码对齐 E2B OpenAPI）；数据面（envd 的文件/进程
+gRPC）用 vessel 原生 `/v1/sandboxes/{id}/exec`，envd gRPC 兼容为后续项。
+
 ```python
 import sys; sys.path.insert(0, "sdk/python")
 from vessel import VesselClient
@@ -101,7 +116,10 @@ CH v52 的 userfaultfd 按需缺页解耦了两者——256MiB 模板与 128MiB 
 - [x] M1 核心域 + process 驱动 + REST + CLI
 - [x] M2 guest agent（vsock）+ Cloud Hypervisor 驱动
 - [x] M3 snapshot / restore / fork + Python SDK
-- [x] M3.5a guest 镜像构建脚本（内核 + Alpine/vessel-agent rootfs）、冷启动 benchmark 脚本
-- [x] M3.5b KVM 真机 e2e 全链路通过（create/exec/snapshot/fork/clone-exec）
-- [ ] M3.5c fork 路径冷启动优化与对比数据（vs Kata/E2B/microsandbox）
+- [x] M3.5 guest 镜像脚本 + KVM 真机 e2e 全链路（create/exec/snapshot/fork）
+- [x] v0.2 按需缺页恢复（内存解耦）+ 并发 clone + VMM 预启动池
+- [x] vessel up 一键引导（双架构、无 KVM 降级、二进制自嵌为 agent）
+- [x] E2B 兼容控制面（SDK drop-in 迁移）
+- [ ] v0.3 containerd shim v2 + K8s RuntimeClass（企业集群，竞品空档）
+- [ ] E2B envd 数据面 gRPC 兼容、erofs 镜像分层
 - [ ] M4 containerd shim v2 + K8s RuntimeClass，多 fork 的 vsock socket 重映射，发布 v0.1

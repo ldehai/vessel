@@ -23,9 +23,21 @@ import (
 	"github.com/ldehai/vessel/pkg/bootstrap"
 	"github.com/ldehai/vessel/pkg/driver/cloudhypervisor"
 	"github.com/ldehai/vessel/pkg/driver/process"
+	"github.com/ldehai/vessel/pkg/e2b"
 	"github.com/ldehai/vessel/pkg/sandbox"
 	"github.com/ldehai/vessel/pkg/vsock"
 )
+
+// httpHandler mounts vessel's native REST API plus the E2B-compatible
+// control-plane routes (/sandboxes) on one mux. E2B SDK clients point their
+// API base URL here; native clients keep using /v1/... and /healthz.
+func httpHandler(mgr *sandbox.Manager, defaultDriver string) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/", api.NewServer(mgr))
+	mux.Handle("/sandboxes", e2b.NewHandler(mgr, defaultDriver))
+	mux.Handle("/sandboxes/", e2b.NewHandler(mgr, defaultDriver))
+	return mux
+}
 
 func newManager(kernel, rootfs string) (*sandbox.Manager, *cloudhypervisor.Driver) {
 	poolSize := 2
@@ -110,19 +122,18 @@ func cmdUp(args []string) int {
 	fmt.Printf(`
 vessel is up — API on %s (driver: %s)
 
-Try it:
+Native API:
 
   curl -X POST localhost%s/v1/sandboxes -d '{"driver":"%s","spec":{}}'
 
-Or with the Python SDK (sdk/python):
+E2B SDK drop-in — point the SDK at this URL, no code changes:
 
-  from vessel import VesselClient
-  sb = VesselClient("http://localhost%s").create(driver="%s")
-  print(sb.exec(["echo", "hello from a microVM"]).stdout)
+  export E2B_API_URL="http://localhost%s"
+  export E2B_API_KEY="local"
 
-`, *addr, driver, *addr, driver, *addr, driver)
+`, *addr, driver, *addr, driver, *addr)
 
-	if err := http.ListenAndServe(*addr, api.NewServer(mgr)); err != nil {
+	if err := http.ListenAndServe(*addr, httpHandler(mgr, driver)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
@@ -196,8 +207,8 @@ func cmdServe(mgr *sandbox.Manager, args []string) int {
 	addr := fs.String("addr", ":7070", "listen address")
 	_ = fs.Parse(args)
 
-	fmt.Println("vessel API listening on", *addr)
-	if err := http.ListenAndServe(*addr, api.NewServer(mgr)); err != nil {
+	fmt.Println("vessel API listening on", *addr, "(native /v1 + E2B-compatible /sandboxes)")
+	if err := http.ListenAndServe(*addr, httpHandler(mgr, "cloudhypervisor")); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
