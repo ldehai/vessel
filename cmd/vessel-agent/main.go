@@ -25,6 +25,12 @@ func main() {
 	listen := flag.String("listen", "", "unix:///path for dev; empty = vsock port 5000")
 	flag.Parse()
 
+	// As PID 1 the kernel-provided environment has no PATH; exec.LookPath
+	// would then fail for anything not given as an absolute path.
+	if os.Getenv("PATH") == "" {
+		_ = os.Setenv("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+	}
+
 	var (
 		l   net.Listener
 		err error

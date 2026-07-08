@@ -79,10 +79,10 @@ echo "HTTP $HTTP: $(cat create.json)"
 [ "$HTTP" = 200 ] || { dump_logs; die "create sandbox (HTTP $HTTP)"; }
 ID=$(sed -E 's/.*"id":"([^"]+)".*/\1/' create.json)
 
-EXEC=$(curl -fsS -X POST "localhost:7070/v1/sandboxes/$ID/exec" \
-  -d '{"cmd":["sh","-c","echo guest-ok $(uname -r) pid=$$"]}') || { dump_logs; die "exec"; }
-echo "exec: $EXEC"
-echo "$EXEC" | grep -q guest-ok || { dump_logs; die "unexpected exec output"; }
+HTTP=$(curl -sS -w '%{http_code}' -o exec.json -X POST "localhost:7070/v1/sandboxes/$ID/exec" \
+  -d '{"cmd":["sh","-c","echo guest-ok $(uname -r) pid=$$"]}')
+echo "exec HTTP $HTTP: $(cat exec.json)"
+[ "$HTTP" = 200 ] && grep -q guest-ok exec.json || { dump_logs; die "exec (HTTP $HTTP)"; }
 
 step "6. e2e: snapshot + fork"
 curl -fsS -X POST "localhost:7070/v1/sandboxes/$ID/snapshot" \

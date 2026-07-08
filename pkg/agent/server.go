@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -75,6 +76,11 @@ func (s *Server) handle(req *Request) *Response {
 		resp.Data = data
 	default:
 		resp.Err = "unknown op: " + string(req.Op)
+	}
+	if resp.Err != "" {
+		// PID 1's stderr is the serial console: make failures visible in
+		// the host-side serial.log.
+		fmt.Fprintf(os.Stderr, "vessel-agent: %s %s: %s\n", req.Op, req.ID, resp.Err)
 	}
 	return resp
 }

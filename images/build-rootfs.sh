@@ -66,6 +66,7 @@ rm -f "$ROOT/sbin/init"
 cat > "$ROOT/sbin/init" <<'EOF'
 #!/bin/sh
 # vessel guest init: minimal PID-1 duties, then become the agent.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 mount -t proc     proc     /proc  2>/dev/null
 mount -t sysfs    sysfs    /sys   2>/dev/null
 mount -t devtmpfs devtmpfs /dev   2>/dev/null
