@@ -39,9 +39,9 @@ Inside the guest, a single static Go binary (`vessel-agent`, ~2.6MB) runs as PID
 
 ## Where it stands
 
-vessel is young and we'd rather undersell it. What exists and is tested today: the core domain model with fork semantics, the Cloud Hypervisor driver (VMM interactions covered by mocks — real-KVM end-to-end is the current milestone), the guest agent and vsock transport with end-to-end tests over real sockets, a REST API, a zero-dependency Python SDK, and reproducible guest image build scripts (Alpine rootfs + agent, prebuilt or source-built kernel).
+vessel is young and we'd rather undersell it. What exists and is verified on real KVM today: the full lifecycle — boot a Cloud Hypervisor microVM, exec over vsock, snapshot it, fork a clone, exec in the clone. Plus: end-to-end agent/vsock tests over real sockets, a REST API, a zero-dependency Python SDK, and reproducible guest image build scripts (Alpine rootfs + agent, official CH kernel).
 
-What does not exist yet: published cold-start benchmarks. Sub-100ms via snapshot restore is the design target, not a measured claim — the benchmark harness is in the repo, and numbers against Kata, E2B and microsandbox will accompany the first release. Also pending: the containerd shim, erofs image layering, and vsock socket remapping for many-clones-from-one-snapshot.
+First real numbers (Ubuntu 24.04, x86_64, CH v45): full-boot cold start averages 589ms — CH process spawn, kernel boot, agent handshake, exec. That's already Kata territory. The fork path (snapshot + restore, no kernel boot) is where the sub-100ms target lives; it works today and its optimization is the current milestone. Comparative numbers against Kata, E2B and microsandbox will accompany the first release. Also pending: the containerd shim, erofs image layering, and vsock socket remapping for many-clones-from-one-snapshot.
 
 If the roadmap survives contact with reality, v0.1 ships with: measured cold starts, Kubernetes RuntimeClass support, and Python/TypeScript SDKs.
 

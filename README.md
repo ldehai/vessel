@@ -69,8 +69,13 @@ sdk/python/                  Python SDK
 go test ./...
 ```
 
-真实 VMM 交互用 mock（unix socket 上的假 CH API、假 hybrid vsock 后接真 agent）覆盖；
-KVM 上的真机 e2e 与冷启动 benchmark 是下一步。
+单元测试用 mock 覆盖 VMM 交互；真机验证用 `scripts/kvm-e2e.sh`（Linux + KVM）。
+
+## 实测数据（2026-07，Ubuntu 24.04 x86_64 / KVM / CH v45）
+
+完整启动路径（CH 进程 + 内核 boot + agent 握手 + exec）：**avg 589ms**（best 567 / worst 625，n=10）。
+fork 路径（snapshot+restore，跳过内核启动）是 <100ms 目标的主赛道，测量已加入
+`bench/coldstart.sh`，优化进行中。
 
 ## 路线图
 
@@ -78,5 +83,6 @@ KVM 上的真机 e2e 与冷启动 benchmark 是下一步。
 - [x] M2 guest agent（vsock）+ Cloud Hypervisor 驱动
 - [x] M3 snapshot / restore / fork + Python SDK
 - [x] M3.5a guest 镜像构建脚本（内核 + Alpine/vessel-agent rootfs）、冷启动 benchmark 脚本
-- [ ] M3.5b KVM 真机 e2e、冷启动数据（vs Kata/E2B/microsandbox）
+- [x] M3.5b KVM 真机 e2e 全链路通过（create/exec/snapshot/fork/clone-exec）
+- [ ] M3.5c fork 路径冷启动优化与对比数据（vs Kata/E2B/microsandbox）
 - [ ] M4 containerd shim v2 + K8s RuntimeClass，多 fork 的 vsock socket 重映射，发布 v0.1
