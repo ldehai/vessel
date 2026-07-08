@@ -122,7 +122,8 @@ CH v52 的 userfaultfd 按需缺页解耦了两者——256MiB 模板与 128MiB 
 - [x] E2B 兼容控制面（SDK drop-in 迁移）
 - [~] v0.3 containerd shim v2 + K8s RuntimeClass（进行中）：Task service 映射、
   pod 注解 `vessel.dev/template` 走恢复路径（未注册模板 fail-fast）、
-  **containerd 启停握手 + TaskExit 事件发布已完成**（全契约测试 + race；
-  `scripts/ctr-e2e.sh` 用真 containerd 验证）。剩：OCI rootfs→virtio-blk、
+  **containerd 启停握手 + TaskExit 事件发布已完成并通过真机验收**
+  （2026-07 Ubuntu 24.04：`scripts/ctr-e2e.sh` 中真 containerd 拉起 shim、
+  ctr run→RUNNING→kill→STOPPED→rm 全链路通过）。剩：OCI rootfs→virtio-blk、
   CNI 桥接、真集群 e2e（见 docs/kubernetes.md）
 - [ ] E2B envd 数据面 gRPC 兼容、erofs 镜像分层
