@@ -20,14 +20,23 @@ M1~M3 已实现：
 
 ## 快速开始
 
+一条命令，从裸机到可用的沙箱 daemon（对比某些竞品的 Docker + MySQL + Redis + 七组件）：
+
 ```bash
-go build ./cmd/vessel
+CGO_ENABLED=0 go build ./cmd/vessel && ./vessel up
+```
 
-# 开发模式：namespace 沙箱（Linux，无需 KVM）
-./vessel run -- sh -c 'echo hello from PID $$'
+`vessel up` 会：检测 KVM 和 CPU 架构（x86_64/arm64 都支持）→ 自动下载
+cloud-hypervisor 和官方 guest 内核 → 用 Alpine + 自身二进制构建 rootfs
+（vessel 二进制同时就是 guest agent，`vessel agent` 子命令）→ 启动 API
+并打印可直接复制的示例。资产缓存在 `~/.vessel`，第二次启动瞬时完成。
+没有 KVM 的机器自动降级到 process 驱动，API 照常可用。
 
-# API 守护进程
-./vessel serve -addr :7070
+其他命令：
+
+```bash
+./vessel run -- sh -c 'echo hello from PID $$'   # 一次性沙箱执行
+./vessel serve -addr :7070                        # 只起 daemon（资产路径用环境变量）
 ```
 
 ```python
