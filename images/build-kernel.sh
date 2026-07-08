@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
-# Obtain a guest kernel (vmlinux) for vessel microVMs.
+# Obtain a guest kernel for vessel microVMs (Cloud Hypervisor driver).
 #
-# Two modes:
-#   download (default) -- fetch a prebuilt PVH-bootable vmlinux from the
-#     Firecracker CI artifact bucket. Works for Cloud Hypervisor too (both
-#     boot uncompressed vmlinux with virtio). Fastest way to get running.
-#   build -- clone Cloud Hypervisor's maintained kernel branch and compile
-#     with their recommended config. Use this for production images.
+# IMPORTANT: Cloud Hypervisor only supports virtio-PCI. Kernels built for
+# Firecracker (virtio-MMIO) will panic with "Cannot open root device vda".
+# Both modes below produce CH-compatible kernels with virtio-PCI built in.
+#
+# Modes:
+#   download (default) -- fetch the official prebuilt kernel from the
+#     cloud-hypervisor/linux GitHub releases (built with ch_defconfig).
+#   build (-b) -- clone the cloud-hypervisor/linux fork and compile with
+#     `make ch_defconfig`. Needs: build-essential flex bison libssl-dev
+#     libelf-dev bc.
 #
 # Usage:
 #   ./build-kernel.sh [-a x86_64|aarch64] [-o vmlinux]           # download
@@ -17,8 +21,7 @@ ARCH=$(uname -m)
 OUT=vmlinux
 MODE=download
 JOBS=$(nproc 2>/dev/null || echo 4)
-# Firecracker CI kernel line known to work with CH; bump as needed.
-FC_KERNEL_VER=${FC_KERNEL_VER:-6.1.102}
+CH_RELEASE=${CH_RELEASE:-ch-release-v6.12.8-20250613}
 CH_KERNEL_BRANCH=${CH_KERNEL_BRANCH:-ch-6.12.8}
 
 while getopts "a:o:bj:h" opt; do
@@ -38,42 +41,41 @@ case $ARCH in
 esac
 
 if [ "$MODE" = download ]; then
-  # Firecracker CI publishes vmlinux images per kernel line and arch.
-  MAJOR_MINOR=$(echo "$FC_KERNEL_VER" | cut -d. -f1-2)
-  URL="https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/${ARCH}/vmlinux-${FC_KERNEL_VER}"
-  echo ">> downloading prebuilt vmlinux ${FC_KERNEL_VER} (${ARCH})"
+  case $ARCH in
+    x86_64)  ASSET=vmlinux-x86_64 ;;
+    aarch64) ASSET=Image-arm64 ;;
+  esac
+  URL="https://github.com/cloud-hypervisor/linux/releases/download/${CH_RELEASE}/${ASSET}"
+  echo ">> downloading official Cloud Hypervisor kernel (${CH_RELEASE}, ${ARCH})"
   echo "   $URL"
   curl -fSL --progress-bar "$URL" -o "$OUT"
   echo "done: $OUT ($(du -h "$OUT" | cut -f1))"
-  echo "note: prebuilt kernel line ${MAJOR_MINOR} is for quick starts;"
-  echo "      use '-b' to build Cloud Hypervisor's ${CH_KERNEL_BRANCH} for production."
   exit 0
 fi
 
 # ---- build mode -----------------------------------------------------------
 command -v make >/dev/null && command -v gcc >/dev/null || {
-  echo "build mode needs make/gcc/flex/bison/libelf-dev/libssl-dev" >&2; exit 1; }
+  echo "build mode needs: sudo apt install build-essential flex bison libssl-dev libelf-dev bc" >&2
+  exit 1
+}
 
 WORK=${KERNEL_WORKDIR:-"$PWD/linux-cloud-hypervisor"}
 if [ ! -d "$WORK" ]; then
-  echo ">> cloning cloud-hypervisor kernel branch $CH_KERNEL_BRANCH (shallow)"
+  echo ">> cloning cloud-hypervisor/linux branch $CH_KERNEL_BRANCH (shallow)"
   git clone --depth 1 -b "$CH_KERNEL_BRANCH" \
     https://github.com/cloud-hypervisor/linux.git "$WORK"
 fi
 cd "$WORK"
 
-echo ">> applying cloud-hypervisor guest config"
 if [ "$ARCH" = x86_64 ]; then
-  CONF_URL="https://raw.githubusercontent.com/cloud-hypervisor/cloud-hypervisor/main/resources/linux-config-x86_64"
-  KIMG=vmlinux
+  echo ">> make ch_defconfig && make vmlinux -j$JOBS"
+  make ch_defconfig
+  CFLAGS="-Wa,-mx86-used-note=no" make vmlinux -j"$JOBS"
+  cp vmlinux "$OUT"
 else
-  CONF_URL="https://raw.githubusercontent.com/cloud-hypervisor/cloud-hypervisor/main/resources/linux-config-aarch64"
-  KIMG=arch/arm64/boot/Image
+  echo ">> ARCH=arm64 make ch_defconfig && make Image -j$JOBS"
+  ARCH=arm64 make ch_defconfig
+  ARCH=arm64 make Image -j"$JOBS"
+  cp arch/arm64/boot/Image "$OUT"
 fi
-curl -fsSL "$CONF_URL" -o .config
-make olddefconfig
-
-echo ">> building (-j$JOBS)"
-make -j"$JOBS" ${ARCH:+ARCH=$([ "$ARCH" = aarch64 ] && echo arm64 || echo x86_64)}
-cp "$KIMG" "$OUT" 2>/dev/null || cp vmlinux "$OUT"
 echo "done: $OUT"
