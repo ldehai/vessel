@@ -12,7 +12,9 @@ The isolation landscape today is strong at the bottom and fragmented in the midd
 
 E2B is excellent but designed around its own cloud; self-hosting means adopting a full infrastructure stack. microsandbox proved that libkrun microVMs can boot in under 100ms, but it's local-first with no containerd or Kubernetes story. Kata Containers integrates beautifully with Kubernetes, but it targets traditional container workloads: no session semantics, no snapshot-and-clone API, and cold starts measured in hundreds of milliseconds.
 
-Nobody offers all four of: OCI/containerd compatibility, microVM isolation, sub-100ms session creation via snapshots, and a self-hostable agent API. That combination is vessel.
+The strongest entrant is Tencent's CubeSandbox (open-sourced April 2026): Cloud Hypervisor-based, template snapshot cloning, sub-60ms starts, E2B SDK compatibility, eBPF networking. It is genuinely good — and it makes three structural choices vessel deliberately inverts. It builds its own parallel cluster stack (CubeMaster/Cubelet) instead of integrating with Kubernetes, so your existing cluster can't schedule its sandboxes. It is x86_64-only. And self-hosting it means Docker, MySQL, Redis, CoreDNS and seven components — a platform you operate, not a binary you run.
+
+vessel's position, sharpened by that comparison: **Kubernetes-native** (RuntimeClass, not a parallel orchestrator), **live fork** (clone a running session's full state, not just a pristine template), **one static Go binary** to self-host, on **x86_64 and arm64**. Fast starts are table stakes in this space now; vessel competes on where and how you can run it.
 
 ## Design
 
