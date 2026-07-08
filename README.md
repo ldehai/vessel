@@ -73,16 +73,15 @@ go test ./...
 
 ## 实测数据（2026-07，Ubuntu 24.04 x86_64 / KVM / CH v45）
 
-| 路径 | avg | best | 说明 |
+| 路径 | 128MiB 模板 | 256MiB 模板 | 说明 |
 |---|---|---|---|
-| 完整启动（boot + 握手 + exec） | 529ms | 524ms | 与 Kata 同量级 |
-| fork（每次 snapshot+restore + exec） | 224ms | 204ms | 快照写盘占大头 |
-| **restore-only（模板快照缓存 + VMM 预启动池）** | **137ms** | **137ms** | 方差 ±0.5ms，Agent 会话主路径 |
+| 完整启动（boot + 握手 + exec） | 524ms | 529ms | 与 Kata 同量级 |
+| fork（每次 snapshot+restore + exec） | 122ms | 224ms | 快照写盘占大头 |
+| **restore-only（模板缓存 + VMM 池，会话主路径）** | **79ms ±0.5ms** | 137ms | **已达 <100ms 目标** |
 
-n=10，模板内存 256MiB。VMM 池只贡献了 ~6ms——CH spawn 本身很快。剩余成本
-主要是快照内存文件的读取（256MB ≈ 120ms+ 磁盘读），与模板内存线性相关：
-`MEM=128 bench/coldstart.sh` 可验证。下一步：restore 内存按需缺页/页缓存共享，
-让恢复成本与内存大小解耦。
+n=10，avg。restore 延迟与模板内存线性相关（Δ58ms/128MB ≈ NVMe 读速），
+即当前瓶颈纯粹是快照内存文件读取。v0.2 计划用按需缺页 + 页缓存共享把恢复
+成本与内存大小解耦；在那之前，128MiB 模板是 Agent 场景的推荐配置。
 
 ## 路线图
 
