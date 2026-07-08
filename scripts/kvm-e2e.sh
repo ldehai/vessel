@@ -98,15 +98,21 @@ echo "exec HTTP $HTTP: $(cat exec.json)"
 [ "$HTTP" = 200 ] && grep -q guest-ok exec.json || { dump_logs; die "exec (HTTP $HTTP)"; }
 
 step "6. e2e: snapshot + fork"
-curl -fsS -X POST "localhost:7070/v1/sandboxes/$ID/snapshot" \
-  -d "{\"path\":\"$WORK/snap-test\"}" || die "snapshot"
-FORK=$(curl -fsS -X POST "localhost:7070/v1/sandboxes/$ID/fork" \
-  -d "{\"path\":\"$WORK/snap-fork\"}") || die "fork"
-echo "fork: $FORK"
-CLONE=$(echo "$FORK" | sed -E 's/.*"id":"([^"]+)".*/\1/')
-curl -fsS -X POST "localhost:7070/v1/sandboxes/$CLONE/exec" \
-  -d '{"cmd":["echo","clone-ok"]}' | grep -q clone-ok || die "exec in clone"
-echo "clone exec OK"
+HTTP=$(curl -sS -w '%{http_code}' -o snap.json -X POST "localhost:7070/v1/sandboxes/$ID/snapshot" \
+  -d "{\"path\":\"$WORK/snap-test\"}")
+echo "snapshot HTTP $HTTP: $(cat snap.json)"
+[ "$HTTP" = 200 ] || { dump_logs; die "snapshot (HTTP $HTTP)"; }
+
+HTTP=$(curl -sS -w '%{http_code}' -o fork.json -X POST "localhost:7070/v1/sandboxes/$ID/fork" \
+  -d "{\"path\":\"$WORK/snap-fork\"}")
+echo "fork HTTP $HTTP: $(cat fork.json)"
+[ "$HTTP" = 200 ] || { dump_logs; die "fork (HTTP $HTTP)"; }
+CLONE=$(sed -E 's/.*"id":"([^"]+)".*/\1/' fork.json)
+
+HTTP=$(curl -sS -w '%{http_code}' -o clone-exec.json -X POST "localhost:7070/v1/sandboxes/$CLONE/exec" \
+  -d '{"cmd":["echo","clone-ok"]}')
+echo "clone exec HTTP $HTTP: $(cat clone-exec.json)"
+[ "$HTTP" = 200 ] && grep -q clone-ok clone-exec.json || { dump_logs; die "exec in clone (HTTP $HTTP)"; }
 
 step "7. cold-start benchmark"
 bash "$REPO/bench/coldstart.sh" -u http://localhost:7070 -d cloudhypervisor -n 10

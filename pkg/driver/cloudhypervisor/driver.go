@@ -2,6 +2,7 @@ package cloudhypervisor
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -94,9 +95,11 @@ func (d *Driver) Create(ctx context.Context, spec *sandbox.Spec) (sandbox.Instan
 // entirely, which is how cold starts get under 100ms.
 //
 // Note: CH restores the vsock device with the host socket path recorded
-// in the snapshot, so the restored VM listens on the snapshot directory's
-// vsock.sock — we reconnect the agent there. Multi-fork from one snapshot
-// will need per-clone socket remapping (tracked for M3 follow-up).
+// in the snapshot (the SOURCE instance's vsock.sock). Binding would fail
+// with EADDRINUSE while the source's socket file exists, so we unlink it
+// first: established connections (source VM <-> its agent client) keep
+// working on their open fds; only NEW dials on that path reach the clone.
+// Proper per-clone socket remapping is tracked for M4.
 func (d *Driver) Restore(ctx context.Context, snapshotPath string) (sandbox.Instance, error) {
 	id := sandbox.NewID()
 	dir := filepath.Join(d.cfg.StateDir, id)
@@ -104,6 +107,9 @@ func (d *Driver) Restore(ctx context.Context, snapshotPath string) (sandbox.Inst
 		return nil, err
 	}
 	apiSock := filepath.Join(dir, "api.sock")
+
+	vsockPath := snapshotVsockPath(snapshotPath)
+	_ = os.Remove(vsockPath) // free the path for the restored VMM's listener
 
 	cmd, err := startVMM(d.cfg.BinaryPath, apiSock, dir)
 	if err != nil {
@@ -113,7 +119,7 @@ func (d *Driver) Restore(ctx context.Context, snapshotPath string) (sandbox.Inst
 	inst := &Instance{
 		id:     id,
 		dir:    dir,
-		vsock:  filepath.Join(snapshotPath, "vsock.sock"),
+		vsock:  vsockPath,
 		api:    NewAPIClient(apiSock),
 		vmm:    cmd,
 		state:  sandbox.StateCreated,
@@ -270,6 +276,33 @@ func (i *Instance) Stop(ctx context.Context) error {
 	}
 	i.state = sandbox.StateStopped
 	return nil
+}
+
+// snapshotVsockPath reads the host-side vsock socket path recorded in a
+// snapshot's config.json. Falls back to <snapshot>/vsock.sock if the file
+// cannot be parsed (older/unknown layouts).
+func snapshotVsockPath(snapshotPath string) string {
+	fallback := filepath.Join(snapshotPath, "vsock.sock")
+	data, err := os.ReadFile(filepath.Join(snapshotPath, "config.json"))
+	if err != nil {
+		return fallback
+	}
+	// The config may be the VmConfig itself or wrapped under "config".
+	var direct struct {
+		Vsock *VsockConfig `json:"vsock"`
+	}
+	if json.Unmarshal(data, &direct) == nil && direct.Vsock != nil && direct.Vsock.Socket != "" {
+		return direct.Vsock.Socket
+	}
+	var wrapped struct {
+		Config struct {
+			Vsock *VsockConfig `json:"vsock"`
+		} `json:"config"`
+	}
+	if json.Unmarshal(data, &wrapped) == nil && wrapped.Config.Vsock != nil && wrapped.Config.Vsock.Socket != "" {
+		return wrapped.Config.Vsock.Socket
+	}
+	return fallback
 }
 
 // startVMM launches cloud-hypervisor with its stdout/stderr captured to
