@@ -336,7 +336,7 @@ func (i *Instance) waitFor(ctx context.Context, fn func() error) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(50 * time.Millisecond):
+		case <-time.After(5 * time.Millisecond):
 		}
 	}
 	return lastErr

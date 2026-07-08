@@ -73,9 +73,14 @@ go test ./...
 
 ## 实测数据（2026-07，Ubuntu 24.04 x86_64 / KVM / CH v45）
 
-完整启动路径（CH 进程 + 内核 boot + agent 握手 + exec）：**avg 589ms**（best 567 / worst 625，n=10）。
-fork 路径（snapshot+restore，跳过内核启动）是 <100ms 目标的主赛道，测量已加入
-`bench/coldstart.sh`，优化进行中。
+| 路径 | avg | best | 说明 |
+|---|---|---|---|
+| 完整启动（boot + 握手 + exec） | 589ms | 567ms | 与 Kata 同量级 |
+| fork（每次 snapshot+restore + exec） | 286ms | 257ms | 快照写盘占大头 |
+| restore-only（模板快照缓存，仅恢复 + exec） | 待测 | 待测 | <100ms 目标主赛道 |
+
+n=10。下一步优化：restore 内存按需加载（CH file-backed + no prefault）、
+去掉恢复后的轮询延迟（waitFor 间隔 50ms 有量化误差）。
 
 ## 路线图
 

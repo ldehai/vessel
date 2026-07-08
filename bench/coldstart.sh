@@ -59,11 +59,26 @@ fork_iter() {
 echo "driver=$DRIVER"
 bench "cold start: full boot (create -> exec)" boot_iter
 
+restore_iter() {
+  local id
+  id=$(curl -fsS -X POST "$URL/v1/sandboxes/restore" \
+        -d "{\"driver\":\"$DRIVER\",\"path\":\"$FORK_DIR/tpl\"}" | sed -E 's/.*"id":"([^"]+)".*/\1/')
+  curl -fsS -X POST "$URL/v1/sandboxes/$id/exec" -d '{"cmd":["true"]}' >/dev/null
+}
+
 # Fork path: clone a prewarmed template (snapshot + restore, no kernel boot).
 TEMPLATE=$(curl -fsS -X POST "$URL/v1/sandboxes" \
   -d "{\"driver\":\"$DRIVER\",\"spec\":{}}" | sed -E 's/.*"id":"([^"]+)".*/\1/')
 if [ -n "$TEMPLATE" ]; then
-  bench "warm start: fork from template (snapshot+restore -> exec)" fork_iter \
+  bench "warm start: fork (snapshot+restore -> exec)" fork_iter \
     || echo "(fork benchmark failed; driver may not support Restore)"
+
+  # Hot path: template snapshotted ONCE, then restore-only per session.
+  # NOTE: restores share the template's recorded vsock path; each new clone
+  # takes it over. Serial restore->exec like this bench is fine.
+  curl -fsS -X POST "$URL/v1/sandboxes/$TEMPLATE/snapshot" \
+    -d "{\"path\":\"$FORK_DIR/tpl\"}" >/dev/null \
+    && bench "hot start: restore-only from cached snapshot (-> exec)" restore_iter \
+    || echo "(restore benchmark failed)"
 fi
 rm -rf "$FORK_DIR"

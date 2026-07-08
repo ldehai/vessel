@@ -147,6 +147,28 @@ func (m *Manager) Snapshot(ctx context.Context, id, path string) error {
 	return e.inst.Snapshot(ctx, path)
 }
 
+// RestoreFrom creates a new instance from an existing snapshot directory
+// without touching any running sandbox. This is the hot path for agent
+// workloads: snapshot a prewarmed template once, restore per session.
+func (m *Manager) RestoreFrom(ctx context.Context, driver, path string) (Instance, error) {
+	m.mu.RLock()
+	d, ok := m.drivers[driver]
+	m.mu.RUnlock()
+	if !ok {
+		return nil, errors.New("unknown driver: " + driver)
+	}
+	r, ok := d.(Restorer)
+	if !ok {
+		return nil, ErrNotSupported
+	}
+	inst, err := r.Restore(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	m.track(inst, d)
+	return inst, nil
+}
+
 // Fork snapshots sandbox id into dir and restores a new instance from it.
 // The source sandbox keeps running; the clone starts from the exact same
 // memory/filesystem state.

@@ -38,6 +38,31 @@ func TestSnapshotAndFork(t *testing.T) {
 	}
 }
 
+func TestRestoreFrom(t *testing.T) {
+	m := NewManager()
+	d := NewFakeDriver()
+	m.RegisterDriver(d)
+	ctx := context.Background()
+
+	src, _ := m.Create(ctx, "fake", &Spec{})
+	if err := m.Snapshot(ctx, src.ID(), "/snap/tpl"); err != nil {
+		t.Fatal(err)
+	}
+	clone, err := m.RestoreFrom(ctx, "fake", "/snap/tpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clone.ID() == src.ID() || clone.State() != StateRunning {
+		t.Fatalf("clone: id=%s state=%s", clone.ID(), clone.State())
+	}
+	if _, ok := m.Get(clone.ID()); !ok {
+		t.Fatal("clone not tracked")
+	}
+	if _, err := m.RestoreFrom(ctx, "nope", "/snap/tpl"); err == nil {
+		t.Fatal("want error for unknown driver")
+	}
+}
+
 func TestForkUnknownSandbox(t *testing.T) {
 	m := NewManager()
 	if _, err := m.Fork(context.Background(), "nope", "/snap"); err == nil {

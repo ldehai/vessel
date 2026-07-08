@@ -22,6 +22,7 @@ func NewServer(mgr *sandbox.Manager) *Server {
 	s.mux.HandleFunc("POST /v1/sandboxes/{id}/exec", s.exec)
 	s.mux.HandleFunc("POST /v1/sandboxes/{id}/snapshot", s.snapshot)
 	s.mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.fork)
+	s.mux.HandleFunc("POST /v1/sandboxes/restore", s.restore)
 	return s
 }
 
@@ -123,6 +124,28 @@ func (s *Server) fork(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, map[string]string{"id": clone.ID(), "state": string(clone.State())})
+}
+
+type restoreReq struct {
+	Driver string `json:"driver"`
+	Path   string `json:"path"`
+}
+
+func (s *Server) restore(w http.ResponseWriter, r *http.Request) {
+	var req restoreReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Path == "" {
+		http.Error(w, "bad restore request: path required", http.StatusBadRequest)
+		return
+	}
+	if req.Driver == "" {
+		req.Driver = "cloudhypervisor"
+	}
+	inst, err := s.mgr.RestoreFrom(r.Context(), req.Driver, req.Path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]string{"id": inst.ID(), "state": string(inst.State())})
 }
 
 func writeJSON(w http.ResponseWriter, v any) {
