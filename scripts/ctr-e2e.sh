@@ -28,8 +28,25 @@ systemctl is-active --quiet containerd || die "containerd is not running"
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 
 step "1. build + install shim"
-(cd "$REPO" && CGO_ENABLED=0 go build -o /usr/local/bin/containerd-shim-vessel-v1 \
-  ./cmd/containerd-shim-vessel-v1) || die "build"
+# Running under sudo, root's PATH usually lacks the user's Go toolchain.
+# Prefer a prebuilt binary in the repo; otherwise locate go (including via
+# the invoking user's shell).
+BIN="$REPO/containerd-shim-vessel-v1"
+if [ ! -x "$BIN" ] || [ -n "${REBUILD:-}" ]; then
+  GO=$(command -v go || true)
+  if [ -z "$GO" ]; then
+    for c in /usr/local/go/bin/go /snap/bin/go /snap/go/current/bin/go; do
+      [ -x "$c" ] && GO=$c && break
+    done
+  fi
+  if [ -z "$GO" ] && [ -n "${SUDO_USER:-}" ]; then
+    GO=$(sudo -u "$SUDO_USER" bash -lc 'command -v go' 2>/dev/null || true)
+  fi
+  [ -n "$GO" ] || die "go not found under sudo; pre-build as your user first:
+  CGO_ENABLED=0 go build -o containerd-shim-vessel-v1 ./cmd/containerd-shim-vessel-v1"
+  (cd "$REPO" && CGO_ENABLED=0 "$GO" build -o "$BIN" ./cmd/containerd-shim-vessel-v1) || die "build"
+fi
+install -m 0755 "$BIN" /usr/local/bin/containerd-shim-vessel-v1
 echo "installed /usr/local/bin/containerd-shim-vessel-v1"
 
 step "2. pull image"
