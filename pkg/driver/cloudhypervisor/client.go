@@ -77,8 +77,20 @@ type SnapshotConfig struct {
 	DestinationURL string `json:"destination_url"` // file:///path
 }
 
+// Memory restore modes (CH >= v52).
+const (
+	MemoryRestoreCopy     = "Copy"     // eager: read full memory file up front
+	MemoryRestoreOnDemand = "OnDemand" // userfaultfd: fault pages in on access
+)
+
 type RestoreConfig struct {
 	SourceURL string `json:"source_url"`
+	// MemoryRestoreMode decouples restore latency from guest memory size
+	// when set to OnDemand. Empty = CH default (Copy). CH < v52 rejects
+	// unknown modes; the driver falls back to Copy automatically.
+	MemoryRestoreMode string `json:"memory_restore_mode,omitempty"`
+	// Resume starts the restored VM immediately, saving a vm.resume call.
+	Resume bool `json:"resume,omitempty"`
 }
 
 func (c *APIClient) Ping(ctx context.Context) error {
@@ -106,8 +118,8 @@ func (c *APIClient) SnapshotVM(ctx context.Context, destURL string) error {
 	return c.call(ctx, http.MethodPut, "vm.snapshot", &SnapshotConfig{DestinationURL: destURL}, nil)
 }
 
-func (c *APIClient) RestoreVM(ctx context.Context, srcURL string) error {
-	return c.call(ctx, http.MethodPut, "vm.restore", &RestoreConfig{SourceURL: srcURL}, nil)
+func (c *APIClient) RestoreVM(ctx context.Context, cfg *RestoreConfig) error {
+	return c.call(ctx, http.MethodPut, "vm.restore", cfg, nil)
 }
 
 func (c *APIClient) ShutdownVM(ctx context.Context) error {

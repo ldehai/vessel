@@ -28,6 +28,10 @@ type Config struct {
 	Cmdline    string        // kernel cmdline (default provided)
 	BootWait   time.Duration // max wait for API socket + agent (default 10s)
 	PoolSize   int           // prewarmed VMM processes (0 = spawn per request)
+	// RestoreMode: MemoryRestoreOnDemand (default) faults snapshot pages in
+	// on first access, decoupling restore latency from template memory size.
+	// Automatically falls back to Copy on CH versions without support.
+	RestoreMode string
 }
 
 func (c *Config) withDefaults() Config {
@@ -45,6 +49,9 @@ func (c *Config) withDefaults() Config {
 	}
 	if out.BootWait == 0 {
 		out.BootWait = 10 * time.Second
+	}
+	if out.RestoreMode == "" {
+		out.RestoreMode = MemoryRestoreOnDemand
 	}
 	return out
 }
@@ -98,20 +105,22 @@ func (d *Driver) Create(ctx context.Context, spec *sandbox.Spec) (sandbox.Instan
 // behind Manager.Fork: restoring a prewarmed template skips kernel boot
 // entirely, which is how cold starts get under 100ms.
 //
-// Note: CH restores the vsock device with the host socket path recorded
-// in the snapshot (the SOURCE instance's vsock.sock). Binding would fail
-// with EADDRINUSE while the source's socket file exists, so we unlink it
-// first: established connections (source VM <-> its agent client) keep
-// working on their open fds; only NEW dials on that path reach the clone.
-// Proper per-clone socket remapping is tracked for M4.
+// Each clone restores from its own overlay snapshot (hardlinked files +
+// rewritten vsock path), so the source VM and any number of concurrent
+// clones never contend on a socket path.
 func (d *Driver) Restore(ctx context.Context, snapshotPath string) (sandbox.Instance, error) {
-	vsockPath := snapshotVsockPath(snapshotPath)
-	_ = os.Remove(vsockPath) // free the path for the restored VMM's listener
-
 	h, err := d.pool.get(ctx)
 	if err != nil {
 		return nil, err
 	}
+
+	vsockPath := filepath.Join(h.dir, "vsock.sock")
+	overlay, err := prepareCloneSnapshot(snapshotPath, h.dir, vsockPath)
+	if err != nil {
+		h.kill()
+		return nil, err
+	}
+	snapshotPath = overlay
 
 	inst := &Instance{
 		id:     h.id,
@@ -127,11 +136,20 @@ func (d *Driver) Restore(ctx context.Context, snapshotPath string) (sandbox.Inst
 		return nil, err
 	}
 
-	if err := inst.api.RestoreVM(ctx, "file://"+snapshotPath); err != nil {
-		return fail(fmt.Errorf("restore: %w", err))
+	// OnDemand restore (userfaultfd) keeps latency independent of template
+	// memory size. Older CH rejects the mode; fall back to eager Copy once.
+	restoreCfg := &RestoreConfig{
+		SourceURL:         "file://" + snapshotPath,
+		MemoryRestoreMode: d.cfg.RestoreMode,
+		Resume:            true,
 	}
-	if err := inst.api.ResumeVM(ctx); err != nil {
-		return fail(fmt.Errorf("resume: %w", err))
+	err = inst.api.RestoreVM(ctx, restoreCfg)
+	if err != nil && restoreCfg.MemoryRestoreMode == MemoryRestoreOnDemand {
+		restoreCfg.MemoryRestoreMode = "" // CH default: Copy
+		err = inst.api.RestoreVM(ctx, restoreCfg)
+	}
+	if err != nil {
+		return fail(fmt.Errorf("restore: %w", err))
 	}
 	var conn io.ReadWriteCloser
 	if err := inst.waitFor(ctx, func() error {
@@ -276,31 +294,60 @@ func (i *Instance) Stop(ctx context.Context) error {
 	return nil
 }
 
-// snapshotVsockPath reads the host-side vsock socket path recorded in a
-// snapshot's config.json. Falls back to <snapshot>/vsock.sock if the file
-// cannot be parsed (older/unknown layouts).
-func snapshotVsockPath(snapshotPath string) string {
-	fallback := filepath.Join(snapshotPath, "vsock.sock")
+// prepareCloneSnapshot builds a per-clone view of a template snapshot in
+// cloneDir/snapshot: every file is hardlinked (zero-copy, memory-ranges can
+// be GBs) except config.json, which is rewritten so the vsock device's host
+// socket points into cloneDir. This gives each clone its own socket path,
+// so N clones can be restored from one template concurrently.
+//
+// The rewrite goes through a generic map to preserve every VmConfig field
+// CH recorded, including ones this driver doesn't model.
+func prepareCloneSnapshot(snapshotPath, cloneDir, vsockPath string) (string, error) {
+	overlay := filepath.Join(cloneDir, "snapshot")
+	if err := os.MkdirAll(overlay, 0o755); err != nil {
+		return "", err
+	}
+	entries, err := os.ReadDir(snapshotPath)
+	if err != nil {
+		return "", fmt.Errorf("read snapshot dir: %w", err)
+	}
+	for _, e := range entries {
+		if e.IsDir() || e.Name() == "config.json" {
+			continue
+		}
+		src := filepath.Join(snapshotPath, e.Name())
+		dst := filepath.Join(overlay, e.Name())
+		if err := os.Link(src, dst); err != nil {
+			// Cross-device etc.: fall back to copying.
+			data, rerr := os.ReadFile(src)
+			if rerr != nil {
+				return "", fmt.Errorf("link/copy %s: %v / %w", e.Name(), err, rerr)
+			}
+			if werr := os.WriteFile(dst, data, 0o600); werr != nil {
+				return "", werr
+			}
+		}
+	}
+
 	data, err := os.ReadFile(filepath.Join(snapshotPath, "config.json"))
 	if err != nil {
-		return fallback
+		return "", fmt.Errorf("read snapshot config.json: %w", err)
 	}
-	// The config may be the VmConfig itself or wrapped under "config".
-	var direct struct {
-		Vsock *VsockConfig `json:"vsock"`
+	var cfg map[string]any
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return "", fmt.Errorf("parse snapshot config.json: %w", err)
 	}
-	if json.Unmarshal(data, &direct) == nil && direct.Vsock != nil && direct.Vsock.Socket != "" {
-		return direct.Vsock.Socket
+	if vs, ok := cfg["vsock"].(map[string]any); ok {
+		vs["socket"] = vsockPath
 	}
-	var wrapped struct {
-		Config struct {
-			Vsock *VsockConfig `json:"vsock"`
-		} `json:"config"`
+	out, err := json.Marshal(cfg)
+	if err != nil {
+		return "", err
 	}
-	if json.Unmarshal(data, &wrapped) == nil && wrapped.Config.Vsock != nil && wrapped.Config.Vsock.Socket != "" {
-		return wrapped.Config.Vsock.Socket
+	if err := os.WriteFile(filepath.Join(overlay, "config.json"), out, 0o600); err != nil {
+		return "", err
 	}
-	return fallback
+	return overlay, nil
 }
 
 // startVMM launches cloud-hypervisor with its stdout/stderr captured to
