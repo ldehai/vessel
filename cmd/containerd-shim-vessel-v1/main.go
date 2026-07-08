@@ -5,15 +5,17 @@
 // created through the restore path — restored from a cached template
 // snapshot in tens of milliseconds rather than booted from scratch.
 //
-// Status: this build serves the Task RPC surface over ttrpc. The containerd
-// process-lifecycle handshake (the start/delete subcommands that hand
-// containerd a socket address, plus the event publisher) is the next slice;
-// invoking the shim the containerd way fails loudly rather than pretending.
-// For local validation run -standalone with a template registry:
+// containerd invokes this binary three ways (see pkg/shim/bootstrap.go):
 //
-//	containerd-shim-vessel-v1 -standalone \
-//	    -socket /run/vessel/shim.sock \
-//	    -templates /etc/vessel/templates.json
+//	shim -namespace <ns> -id <id> -address <sock> ... start   bootstrap: print daemon address
+//	shim -namespace <ns> -id <id> -address <sock> ... delete  cleanup after a dead shim
+//	shim -namespace <ns> -id <id> -address <sock>             the daemon itself (fd 3 = listener)
+//
+// Node configuration (VM assets, template registry) lives in
+// /etc/vessel/shim.json — see pkg/shim/config.go and docs/kubernetes.md.
+//
+// A fourth mode, -standalone, serves the Task API on a fixed socket without
+// containerd, for local validation.
 package main
 
 import (
@@ -25,29 +27,51 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/ldehai/vessel/pkg/driver/cloudhypervisor"
-	"github.com/ldehai/vessel/pkg/driver/process"
-	"github.com/ldehai/vessel/pkg/sandbox"
 	"github.com/ldehai/vessel/pkg/shim"
 )
 
 func main() {
 	var (
-		standalone = flag.Bool("standalone", false, "serve the Task service on -socket (local validation, not the containerd handshake)")
-		socket     = flag.String("socket", "/run/vessel/shim.sock", "unix socket to serve on (standalone mode)")
-		templates  = flag.String("templates", "", "JSON template registry: id -> {driver, path} (see docs/kubernetes.md)")
-		id         = flag.String("id", "", "task id (containerd invocation)")
-		address    = flag.String("address", "", "containerd address (containerd invocation)")
+		namespace  = flag.String("namespace", "", "containerd namespace")
+		id         = flag.String("id", "", "task id")
+		address    = flag.String("address", "", "containerd main socket address")
+		_          = flag.String("publish-binary", "", "accepted for containerd compatibility (events go over TTRPC_ADDRESS)")
+		_          = flag.Bool("debug", false, "accepted for containerd compatibility")
+		standalone = flag.Bool("standalone", false, "serve the Task service on -socket without containerd")
+		socket     = flag.String("socket", "/run/vessel/shim.sock", "unix socket (standalone mode)")
+		templates  = flag.String("templates", "", "template registry JSON (standalone mode; containerd mode uses /etc/vessel/shim.json)")
 	)
 	flag.Parse()
 
-	if !*standalone {
-		fmt.Fprintln(os.Stderr, "containerd-shim-vessel-v1: the containerd handshake is not implemented in this build")
-		fmt.Fprintln(os.Stderr, "  run with -standalone to serve the Task service directly (see docs/kubernetes.md)")
-		_, _ = id, address
-		os.Exit(1)
+	switch flag.Arg(0) {
+	case "start":
+		addr, err := shim.RunStart(*namespace, *id, *address)
+		if err != nil {
+			fatal("start", err)
+		}
+		fmt.Print(addr) // containerd reads the address from stdout
+	case "delete":
+		resp, err := shim.RunDelete(*namespace, *id, *address)
+		if err != nil {
+			fatal("delete", err)
+		}
+		data, err := shim.MarshalDeleteResponse(resp)
+		if err != nil {
+			fatal("delete", err)
+		}
+		_, _ = os.Stdout.Write(data)
+	case "":
+		if *standalone {
+			os.Exit(runStandalone(*socket, *templates))
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		if err := shim.RunDaemon(ctx, *namespace); err != nil {
+			fatal("daemon", err)
+		}
+	default:
+		fatal("args", fmt.Errorf("unknown subcommand %q (want start, delete, or none)", flag.Arg(0)))
 	}
-	os.Exit(runStandalone(*socket, *templates))
 }
 
 func runStandalone(socket, templatesPath string) int {
@@ -61,20 +85,12 @@ func runStandalone(socket, templatesPath string) int {
 		tmpls = m
 		fmt.Printf("loaded %d template(s) from %s\n", len(m), templatesPath)
 	}
-
-	mgr := sandbox.NewManager()
-	mgr.RegisterDriver(process.New())
-	mgr.RegisterDriver(cloudhypervisor.New(cloudhypervisor.Config{
-		BinaryPath: os.Getenv("VESSEL_CH_BINARY"),
-		KernelPath: os.Getenv("VESSEL_KERNEL"),
-		RootfsPath: os.Getenv("VESSEL_ROOTFS"),
-	}))
-
-	defaultDriver := "cloudhypervisor"
-	if os.Getenv("VESSEL_KERNEL") == "" {
-		defaultDriver = "process" // no VM assets: stay usable for API validation
+	cfg, err := shim.LoadConfig("")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config:", err)
+		return 1
 	}
-	svc := shim.NewService(mgr, defaultDriver, tmpls)
+	svc := shim.NewServiceFromConfig(cfg, tmpls)
 
 	_ = os.Remove(socket)
 	l, err := net.Listen("unix", socket)
@@ -82,7 +98,7 @@ func runStandalone(socket, templatesPath string) int {
 		fmt.Fprintln(os.Stderr, "listen:", err)
 		return 1
 	}
-	fmt.Printf("vessel shim: Task service on %s (driver: %s)\n", socket, defaultDriver)
+	fmt.Printf("vessel shim: Task service on %s (driver: %s)\n", socket, cfg.DefaultDriver())
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -91,4 +107,9 @@ func runStandalone(socket, templatesPath string) int {
 		return 1
 	}
 	return 0
+}
+
+func fatal(stage string, err error) {
+	fmt.Fprintf(os.Stderr, "containerd-shim-vessel-v1 %s: %v\n", stage, err)
+	os.Exit(1)
 }

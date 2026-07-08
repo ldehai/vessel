@@ -60,20 +60,39 @@ engine, three front doors (K8s, native REST, E2B).
 - `containerd-shim-vessel-v1 -standalone -templates <file>`: serves the
   Task service on a fixed socket with a template registry for local
   validation.
+- **The containerd handshake** (`pkg/shim/bootstrap.go`): the `start`
+  subcommand listens on a derived socket, re-execs itself as a daemon
+  (listener inherited as fd 3), records `bundle/address` + `bundle/
+  shim.pid`, and prints the address containerd connects to; `delete`
+  kills the daemon's process group and cleans up; `Shutdown` exits an
+  idle daemon. Covered by a full-contract test (start → connect →
+  lifecycle → Shutdown → delete, plus stale-socket recovery) that
+  re-execs the test binary as the daemon.
+- **Event publishing** (`pkg/shim/events.go`): TaskCreate/Start/Exit/
+  Delete forwarded to containerd's ttrpc events endpoint
+  (`TTRPC_ADDRESS`). TaskExit is what makes kubelet notice pod death.
+  Best-effort with logging — event failures never fail the triggering RPC.
+- **Node config** (`/etc/vessel/shim.json`, `pkg/shim/config.go`): VM
+  assets, pool size and the template registry. Missing file = defaults
+  (process driver); malformed file = hard error, because silently
+  ignoring an admin's template registry means cold boots where warm
+  restores were configured.
+- **Real-containerd e2e**: `sudo ./scripts/ctr-e2e.sh` has containerd
+  itself spawn the shim and drive run/kill/rm via `ctr`.
 
 ## What's next
 
-- The containerd start/delete subcommand handshake + ttrpc event publisher
-  (TaskExit etc.), so containerd launches and manages the shim itself.
 - OCI rootfs → virtio-blk image conversion for the CH driver (pairs with
   erofs layering). Today the process driver consumes the bundle rootfs
-  directly; the CH driver needs a block image.
+  directly; the CH driver needs a block image. Until this lands, the shim
+  does not execute the container's OCI command — `ctr run` validates
+  lifecycle, not workload execution.
 - Pod networking: bridge the CNI netns into the VM (Kata's tc-mirror /
   vhost-net approach).
 - Real-cluster e2e: `kubectl run` a template-annotated pod, `kubectl exec`
   (needs Exec), `kubectl delete`.
 
-## Intended usage (once the handshake lands)
+## Usage
 
 Install the shim on each node's `$PATH` and register a RuntimeClass:
 

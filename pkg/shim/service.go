@@ -18,15 +18,18 @@ package shim
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 
+	eventstypes "github.com/containerd/containerd/api/events"
 	taskapi "github.com/containerd/containerd/api/runtime/task/v2"
 	"github.com/containerd/containerd/api/types/task"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -47,10 +50,20 @@ type Service struct {
 	defaultDriver string
 	templates     Templates
 	pid           uint32
+	publisher     Publisher // nil = no event forwarding (standalone/tests)
+	onShutdown    func()    // cancels the serve loop; nil = ignore Shutdown
 
 	mu    sync.Mutex
 	tasks map[string]*taskState // containerd task ID -> state
 }
+
+// SetPublisher wires containerd event forwarding (TaskCreate/Start/Exit/
+// Delete). Call before serving.
+func (s *Service) SetPublisher(p Publisher) { s.publisher = p }
+
+// SetShutdown installs the function the Shutdown RPC invokes so containerd
+// can terminate an idle shim. Call before serving.
+func (s *Service) SetShutdown(fn func()) { s.onShutdown = fn }
 
 type taskState struct {
 	inst       sandbox.Instance
@@ -121,6 +134,9 @@ func (s *Service) Create(ctx context.Context, r *taskapi.CreateTaskRequest) (*ta
 	s.tasks[r.ID] = &taskState{inst: inst, bundle: r.Bundle, status: task.Status_CREATED}
 	s.mu.Unlock()
 
+	s.publishWarn(TopicTaskCreate, &eventstypes.TaskCreate{
+		ContainerID: r.ID, Bundle: r.Bundle, Pid: s.pid,
+	})
 	return &taskapi.CreateTaskResponse{Pid: s.pid}, nil
 }
 
@@ -138,6 +154,7 @@ func (s *Service) Start(_ context.Context, r *taskapi.StartRequest) (*taskapi.St
 		return nil, status.Errorf(codes.FailedPrecondition, "task %q is %s, not created", r.ID, ts.status)
 	}
 	ts.status = task.Status_RUNNING
+	s.publishWarn(TopicTaskStart, &eventstypes.TaskStart{ContainerID: r.ID, Pid: s.pid})
 	return &taskapi.StartResponse{Pid: s.pid}, nil
 }
 
@@ -180,7 +197,7 @@ func (s *Service) Kill(ctx context.Context, r *taskapi.KillRequest) (*emptypb.Em
 	if sig == 0 {
 		sig = 9 // SIGKILL by convention when unspecified
 	}
-	s.markExited(ts, 128+sig)
+	s.markExited(r.ID, ts, 128+sig)
 	return &emptypb.Empty{}, nil
 }
 
@@ -199,13 +216,16 @@ func (s *Service) Delete(ctx context.Context, r *taskapi.DeleteRequest) (*taskap
 	}
 
 	_ = ts.inst.Stop(ctx)
-	s.markExited(ts, 0) // no-op if Kill already recorded an exit
+	s.markExited(r.ID, ts, 0) // no-op if Kill already recorded an exit
 
 	s.mu.Lock()
 	delete(s.tasks, r.ID)
 	exitStatus, exitedAt := ts.exitStatus, ts.exitedAt
 	s.mu.Unlock()
 
+	s.publishWarn(TopicTaskDelete, &eventstypes.TaskDelete{
+		ContainerID: r.ID, Pid: s.pid, ExitStatus: exitStatus, ExitedAt: tspb(exitedAt),
+	})
 	return &taskapi.DeleteResponse{Pid: s.pid, ExitStatus: exitStatus, ExitedAt: tspb(exitedAt)}, nil
 }
 
@@ -238,20 +258,35 @@ func (s *Service) Wait(ctx context.Context, r *taskapi.WaitRequest) (*taskapi.Wa
 	return &taskapi.WaitResponse{ExitStatus: ts.exitStatus, ExitedAt: tspb(ts.exitedAt)}, nil
 }
 
-// markExited transitions to STOPPED exactly once and wakes waiters.
-func (s *Service) markExited(ts *taskState, code uint32) {
+// markExited transitions to STOPPED exactly once, wakes waiters and
+// publishes TaskExit — the event kubelet depends on to notice pod death.
+func (s *Service) markExited(id string, ts *taskState, code uint32) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if ts.status == task.Status_STOPPED {
+		s.mu.Unlock()
 		return
 	}
 	ts.status = task.Status_STOPPED
 	ts.exitStatus = code
 	ts.exitedAt = time.Now()
+	exitedAt := ts.exitedAt
 	for _, ch := range ts.waiters {
 		close(ch)
 	}
 	ts.waiters = nil
+	s.mu.Unlock()
+
+	if err := s.publishTaskExit(id, code, exitedAt); err != nil {
+		fmt.Fprintf(os.Stderr, "vessel-shim: publish TaskExit for %s: %v\n", id, err)
+	}
+}
+
+// publishWarn emits best-effort: event failures must not fail the RPC that
+// triggered them, but they are logged (stderr = the shim log).
+func (s *Service) publishWarn(topic string, event proto.Message) {
+	if err := s.publish(topic, event); err != nil {
+		fmt.Fprintf(os.Stderr, "vessel-shim: publish %s: %v\n", topic, err)
+	}
 }
 
 func (s *Service) Pids(_ context.Context, r *taskapi.PidsRequest) (*taskapi.PidsResponse, error) {
@@ -269,7 +304,16 @@ func (s *Service) Connect(_ context.Context, _ *taskapi.ConnectRequest) (*taskap
 	return &taskapi.ConnectResponse{ShimPid: s.pid, TaskPid: s.pid}, nil
 }
 
+// Shutdown lets containerd terminate an idle shim. Only honored when no
+// tasks remain, matching containerd's expectation that a shim with live
+// tasks refuses to die under it.
 func (s *Service) Shutdown(_ context.Context, _ *taskapi.ShutdownRequest) (*emptypb.Empty, error) {
+	s.mu.Lock()
+	idle := len(s.tasks) == 0
+	s.mu.Unlock()
+	if idle && s.onShutdown != nil {
+		s.onShutdown()
+	}
 	return &emptypb.Empty{}, nil
 }
 

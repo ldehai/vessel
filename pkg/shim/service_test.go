@@ -29,11 +29,17 @@ func newTestService(t *testing.T, templates Templates) (*Service, *sandbox.FakeD
 func writeBundle(t *testing.T, annotations map[string]string) string {
 	t.Helper()
 	dir := t.TempDir()
+	writeBundleConfig(t, dir, annotations)
+	return dir
+}
+
+// writeBundleConfig writes an OCI config.json into an existing bundle dir.
+func writeBundleConfig(t *testing.T, dir string, annotations map[string]string) {
+	t.Helper()
 	data, _ := json.Marshal(map[string]any{"annotations": annotations})
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return dir
 }
 
 func wantCode(t *testing.T, err error, want codes.Code) {
