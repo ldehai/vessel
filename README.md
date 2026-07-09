@@ -126,7 +126,9 @@ CH v52 的 userfaultfd 按需缺页解耦了两者——256MiB 模板与 128MiB 
   （2026-07 Ubuntu 24.04：`scripts/ctr-e2e.sh` 中真 containerd 拉起 shim、
   ctr run→RUNNING→kill→STOPPED→rm 全链路通过）。**OCI rootfs→块镜像转换
   已完成**（`pkg/image`：erofs 优先、ext4 兜底，CH 驱动 boot 时自动打包）。
-  剩：CNI 桥接、真集群 e2e（见 docs/kubernetes.md）
+  **非交互 Exec 已完成**（`ctr task exec` / `kubectl exec`：OCI args 经 vsock
+  agent 执行，stdout/stderr 写 containerd FIFO，退出发 TaskExit 带 exec id；
+  terminal/stdin 显式 Unimplemented）。剩：CNI 桥接、真集群 e2e（见 docs/kubernetes.md）
 - [ ] E2B envd 数据面 gRPC 兼容、erofs 镜像分层
 
 ## AI 参与说明

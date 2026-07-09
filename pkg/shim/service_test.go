@@ -169,7 +169,8 @@ func TestKillSignalSemantics(t *testing.T) {
 	}
 }
 
-func TestExecIDRejected(t *testing.T) {
+// Unknown exec ids are NotFound on every exec-routed RPC.
+func TestUnknownExecIDRejected(t *testing.T) {
 	s, _ := newTestService(t, nil)
 	ctx := context.Background()
 	bundle := writeBundle(t, nil)
@@ -186,7 +187,7 @@ func TestExecIDRejected(t *testing.T) {
 func TestUnimplementedAreExplicit(t *testing.T) {
 	s, _ := newTestService(t, nil)
 	ctx := context.Background()
-	_, err := s.Exec(ctx, &taskapi.ExecProcessRequest{ID: "p"})
+	_, err := s.ResizePty(ctx, &taskapi.ResizePtyRequest{ID: "p"})
 	wantCode(t, err, codes.Unimplemented)
 	_, err = s.Pause(ctx, &taskapi.PauseRequest{ID: "p"})
 	wantCode(t, err, codes.Unimplemented)

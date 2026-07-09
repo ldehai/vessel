@@ -62,6 +62,11 @@ sleep 0.5
 ctr task ls | tee /dev/stderr | grep -E "^$TASK .*RUNNING" >/dev/null \
   || die "task not RUNNING in ctr task ls"
 
+step "4b. ctr task exec runs a command in the sandbox"
+EXEC_OUT=$(ctr task exec --exec-id smoke1 "$TASK" /bin/echo vessel-exec-ok 2>&1)
+echo "$EXEC_OUT"
+echo "$EXEC_OUT" | grep -q vessel-exec-ok || die "ctr task exec did not return command output"
+
 step "5. kill -> containerd receives exit via our TaskExit event"
 ctr task kill -s TERM "$TASK" || die "task kill"
 for i in $(seq 1 50); do

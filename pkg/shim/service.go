@@ -72,6 +72,7 @@ type taskState struct {
 	exitStatus uint32
 	exitedAt   time.Time
 	waiters    []chan struct{}
+	execs      map[string]*execState // exec id -> state (see exec.go)
 }
 
 func NewService(mgr *sandbox.Manager, defaultDriver string, templates Templates) *Service {
@@ -131,7 +132,12 @@ func (s *Service) Create(ctx context.Context, r *taskapi.CreateTaskRequest) (*ta
 		_ = inst.Stop(ctx)
 		return nil, status.Errorf(codes.AlreadyExists, "task %q already exists", r.ID)
 	}
-	s.tasks[r.ID] = &taskState{inst: inst, bundle: r.Bundle, status: task.Status_CREATED}
+	s.tasks[r.ID] = &taskState{
+		inst:   inst,
+		bundle: r.Bundle,
+		status: task.Status_CREATED,
+		execs:  map[string]*execState{},
+	}
 	s.mu.Unlock()
 
 	s.publishWarn(TopicTaskCreate, &eventstypes.TaskCreate{
@@ -142,7 +148,7 @@ func (s *Service) Create(ctx context.Context, r *taskapi.CreateTaskRequest) (*ta
 
 func (s *Service) Start(_ context.Context, r *taskapi.StartRequest) (*taskapi.StartResponse, error) {
 	if r.ExecID != "" {
-		return nil, errNoExec(r.ExecID)
+		return s.startExec(r.ID, r.ExecID)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -160,7 +166,7 @@ func (s *Service) Start(_ context.Context, r *taskapi.StartRequest) (*taskapi.St
 
 func (s *Service) State(_ context.Context, r *taskapi.StateRequest) (*taskapi.StateResponse, error) {
 	if r.ExecID != "" {
-		return nil, errNoExec(r.ExecID)
+		return s.execState(r.ID, r.ExecID)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -184,7 +190,10 @@ func (s *Service) State(_ context.Context, r *taskapi.StateRequest) (*taskapi.St
 // can still distinguish SIGTERM (143) from SIGKILL (137).
 func (s *Service) Kill(ctx context.Context, r *taskapi.KillRequest) (*emptypb.Empty, error) {
 	if r.ExecID != "" {
-		return nil, errNoExec(r.ExecID)
+		if err := s.killExec(r.ID, r.ExecID); err != nil {
+			return nil, err
+		}
+		return &emptypb.Empty{}, nil
 	}
 	s.mu.Lock()
 	ts, ok := s.tasks[r.ID]
@@ -206,7 +215,7 @@ func (s *Service) Kill(ctx context.Context, r *taskapi.KillRequest) (*emptypb.Em
 // complete, then is removed.
 func (s *Service) Delete(ctx context.Context, r *taskapi.DeleteRequest) (*taskapi.DeleteResponse, error) {
 	if r.ExecID != "" {
-		return nil, errNoExec(r.ExecID)
+		return s.deleteExec(r.ID, r.ExecID)
 	}
 	s.mu.Lock()
 	ts, ok := s.tasks[r.ID]
@@ -232,7 +241,7 @@ func (s *Service) Delete(ctx context.Context, r *taskapi.DeleteRequest) (*taskap
 // Wait blocks until the task exits, then returns its exit record.
 func (s *Service) Wait(ctx context.Context, r *taskapi.WaitRequest) (*taskapi.WaitResponse, error) {
 	if r.ExecID != "" {
-		return nil, errNoExec(r.ExecID)
+		return s.waitExec(ctx, r.ID, r.ExecID)
 	}
 	s.mu.Lock()
 	ts, ok := s.tasks[r.ID]
@@ -330,15 +339,11 @@ func (s *Service) Stats(_ context.Context, r *taskapi.StatsRequest) (*taskapi.St
 // --- honestly unimplemented ---
 //
 // These return codes.Unimplemented (the canonical answer for optional
-// capabilities a runtime lacks) instead of silently succeeding: a silent
-// no-op Exec would make `kubectl exec` appear to work while doing nothing.
-// Exec/pty/IO land together with the guest-agent data-plane work;
-// Pause/Resume will map onto CH vm.pause/vm.resume; Checkpoint onto
-// vessel snapshots.
+// capabilities a runtime lacks) instead of silently succeeding. Exec is
+// implemented (non-interactive) in exec.go; pty/IO plumbing lands with
+// streaming support; Pause/Resume will map onto CH vm.pause/vm.resume;
+// Checkpoint onto vessel snapshots.
 
-func (s *Service) Exec(context.Context, *taskapi.ExecProcessRequest) (*emptypb.Empty, error) {
-	return nil, errUnimplemented("Exec")
-}
 func (s *Service) ResizePty(context.Context, *taskapi.ResizePtyRequest) (*emptypb.Empty, error) {
 	return nil, errUnimplemented("ResizePty")
 }
@@ -362,10 +367,6 @@ func (s *Service) Update(context.Context, *taskapi.UpdateTaskRequest) (*emptypb.
 
 func errNotFound(id string) error {
 	return status.Errorf(codes.NotFound, "task %q not found", id)
-}
-
-func errNoExec(execID string) error {
-	return status.Errorf(codes.NotFound, "exec %q: exec processes are not supported yet", execID)
 }
 
 func errUnimplemented(op string) error {

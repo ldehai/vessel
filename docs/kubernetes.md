@@ -41,14 +41,20 @@ engine, three front doors (K8s, native REST, E2B).
 - **Pids.** Tasks live inside a microVM with no host-visible init, so (as
   with other VM runtimes) the shim reports its own pid to containerd,
   consistently across Create/Start/State/Pids/Connect.
-- **Signals.** The shim cannot yet deliver signals inside the guest, so any
-  `Kill` tears the sandbox down; the exit status is the conventional
+- **Signals.** The shim cannot yet deliver signals inside the guest, so a
+  task `Kill` tears the sandbox down; the exit status is the conventional
   128+signal (SIGTERM→143, SIGKILL→137) so callers can distinguish them.
-- **Unimplemented RPCs are explicit.** Exec/ResizePty/CloseIO (land with the
-  guest data-plane work), Pause/Resume (will map to CH vm.pause/resume) and
-  Checkpoint/Update return codes.Unimplemented instead of fake success — a
-  silent no-op Exec would make `kubectl exec` appear to work while doing
-  nothing.
+  Signalling an individual exec process is likewise not possible yet, so
+  `Kill` on an exec id returns Unimplemented rather than lying.
+- **Exec (`ctr task exec` / `kubectl exec`).** Non-interactive exec is
+  implemented: the OCI process spec's args run in the sandbox via the vsock
+  agent, buffered stdout/stderr go to containerd's FIFOs, and the exec's
+  exit is published as TaskExit carrying the exec id. Interactive terminals
+  and stdin are explicitly Unimplemented (they need streaming pty plumbing),
+  never silently accepted.
+- **Unimplemented RPCs are explicit.** ResizePty/CloseIO (land with pty
+  streaming), Pause/Resume (will map to CH vm.pause/resume) and
+  Checkpoint/Update return codes.Unimplemented instead of fake success.
 
 ## What works now
 
@@ -78,7 +84,12 @@ engine, three front doors (K8s, native REST, E2B).
   ignoring an admin's template registry means cold boots where warm
   restores were configured.
 - **Real-containerd e2e**: `sudo ./scripts/ctr-e2e.sh` has containerd
-  itself spawn the shim and drive run/kill/rm via `ctr`.
+  itself spawn the shim and drive run/exec/kill/rm via `ctr`.
+- **Non-interactive exec** (`pkg/shim/exec.go`): `ctr task exec` /
+  `kubectl exec` run a command in the sandbox via the vsock agent; each
+  exec has its own CREATED→RUNNING→STOPPED lifecycle, buffered output goes
+  to containerd's FIFOs, and its exit is a TaskExit event tagged with the
+  exec id. Terminal/stdin/exec-signalling are honest Unimplemented.
 - **OCI rootfs → block image** (`pkg/image`): the CH driver packs the
   bundle's rootfs directory into a virtio-blk image on boot — mkfs.erofs
   when available (read-only, dedup, page-cache shared across VMs), else
