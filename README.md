@@ -128,3 +128,9 @@ CH v52 的 userfaultfd 按需缺页解耦了两者——256MiB 模板与 128MiB 
   已完成**（`pkg/image`：erofs 优先、ext4 兜底，CH 驱动 boot 时自动打包）。
   剩：CNI 桥接、真集群 e2e（见 docs/kubernetes.md）
 - [ ] E2B envd 数据面 gRPC 兼容、erofs 镜像分层
+
+## AI 参与说明
+
+本项目由 [Claude](https://claude.com)（Claude Fable 5）在人类主导下结对开发：
+架构决策、真机验证与最终审核由维护者完成，代码实现与测试由 AI 编写。
+相关提交带有 `Co-Authored-By: Claude Fable 5` trailer。
