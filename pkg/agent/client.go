@@ -70,3 +70,9 @@ func (c *Client) ReadFile(path string) ([]byte, error) {
 	}
 	return resp.Data, nil
 }
+
+// ConfigureNet makes the guest adopt the pod's network identity on a NIC.
+func (c *Client) ConfigureNet(cfg *NetConfig) error {
+	_, err := c.roundTrip(&Request{Op: OpConfigureNet, Net: cfg})
+	return err
+}

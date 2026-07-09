@@ -74,6 +74,10 @@ func (s *Server) handle(req *Request) *Response {
 			break
 		}
 		resp.Data = data
+	case OpConfigureNet:
+		if err := configureNet(req.Net); err != nil {
+			resp.Err = err.Error()
+		}
 	default:
 		resp.Err = "unknown op: " + string(req.Op)
 	}
