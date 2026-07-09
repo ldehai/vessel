@@ -21,7 +21,19 @@ die()  { echo "FAIL: $*" >&2; exit 1; }
 step "0. environment"
 [ -e /dev/kvm ] || die "/dev/kvm not found (enable KVM / check permissions: sudo usermod -aG kvm \$USER)"
 [ -r /dev/kvm ] && [ -w /dev/kvm ] || die "no rw access to /dev/kvm (log out/in after usermod -aG kvm)"
-command -v go >/dev/null || die "go toolchain not installed"
+# Under sudo, root's PATH usually lacks the user's Go toolchain. Locate it,
+# including via common install dirs and the invoking user's login shell.
+GO=$(command -v go || true)
+if [ -z "$GO" ]; then
+  for c in /usr/local/go/bin/go /snap/bin/go /snap/go/current/bin/go "$HOME/go-toolchain/go/bin/go"; do
+    [ -x "$c" ] && GO=$c && break
+  done
+fi
+if [ -z "$GO" ] && [ -n "${SUDO_USER:-}" ]; then
+  GO=$(sudo -u "$SUDO_USER" bash -lc 'command -v go' 2>/dev/null || true)
+fi
+[ -n "$GO" ] || die "go toolchain not found (install go, or run without sudo where go is on PATH)"
+echo "go: $GO"
 uname -a
 
 step "1. cloud-hypervisor binary"
@@ -60,7 +72,7 @@ fi
 cloud-hypervisor --version
 
 step "2. build vessel"
-(cd "$REPO" && go build -o "$WORK/vessel" ./cmd/vessel) || die "go build"
+(cd "$REPO" && "$GO" build -o "$WORK/vessel" ./cmd/vessel) || die "go build"
 
 step "3. guest images"
 if [ "$SKIP_IMAGES" = 1 ] && [ -f vmlinux ]; then
@@ -125,7 +137,7 @@ step "7. cold-start benchmark"
 bash "$REPO/bench/coldstart.sh" -u http://localhost:7070 -d cloudhypervisor -n 10
 
 step "8. shim test suite under race detector"
-(cd "$REPO" && go test -race -count=1 ./pkg/shim/) || die "shim tests"
+(cd "$REPO" && "$GO" test -race -count=1 ./pkg/shim/) || die "shim tests"
 
 step "9. rootfs->block-image microVM (a directory rootfs booted as a VM)"
 # Unpack the prebuilt rootfs image into a directory, then create a sandbox
