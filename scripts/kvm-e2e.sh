@@ -165,4 +165,42 @@ else
   rmdir "$MNT" 2>/dev/null || true
 fi
 
+step "10. pod networking: microVM adopts a CNI-style netns and reaches out"
+# Build a netns that looks like CNI's output: a veth pair, one end in the
+# netns as eth0 with an IP + default route, the other end on the host as a
+# gateway that NATs to the outside. Then create a sandbox bound to that
+# netns and check the guest got the IP and can reach the gateway.
+NETNS=vessel-e2e-net
+HOSTVETH=vess-h0
+GUEST_IP=10.99.0.5/24
+GW_IP=10.99.0.1
+ip netns add "$NETNS" 2>/dev/null || true
+cleanup_net() { ip netns del "$NETNS" 2>/dev/null; ip link del "$HOSTVETH" 2>/dev/null; }
+trap 'kill $DAEMON 2>/dev/null; cleanup_net' EXIT
+
+if ip link add "$HOSTVETH" type veth peer name eth0 netns "$NETNS" 2>/dev/null; then
+  ip addr add "$GW_IP/24" dev "$HOSTVETH"; ip link set "$HOSTVETH" up
+  ip netns exec "$NETNS" ip addr add "$GUEST_IP" dev eth0
+  ip netns exec "$NETNS" ip link set eth0 up
+  ip netns exec "$NETNS" ip link set lo up
+  ip netns exec "$NETNS" ip route add default via "$GW_IP"
+
+  HTTP=$(curl -sS -w '%{http_code}' -o net.json -X POST localhost:7070/v1/sandboxes \
+    -d "{\"driver\":\"cloudhypervisor\",\"spec\":{\"Netns\":\"/var/run/netns/$NETNS\"}}")
+  echo "netns create HTTP $HTTP: $(cat net.json)"
+  [ "$HTTP" = 200 ] || { dump_logs; die "pod-netns microVM (HTTP $HTTP)"; }
+  NID=$(sed -E 's/.*"id":"([^"]+)".*/\1/' net.json)
+
+  # The guest should have configured eth0 with the pod IP and be able to
+  # ping the gateway across the tc-mirrored TAP.
+  OUT=$(curl -sS -X POST "localhost:7070/v1/sandboxes/$NID/exec" \
+    -d '{"cmd":["sh","-c","ip -4 addr show eth0 | grep -o 10.99.0.5 && ping -c1 -W2 10.99.0.1 >/dev/null && echo net-ok"]}')
+  echo "guest net: $OUT"
+  echo "$OUT" | grep -q net-ok || { dump_logs; die "guest did not adopt pod IP / reach gateway"; }
+  echo "pod netns -> tc-mirror TAP -> guest eth0 -> gateway reachable OK"
+else
+  echo "(skip: cannot create veth into netns; needs root/CAP_NET_ADMIN)"
+fi
+cleanup_net
+
 step "ALL PASSED"

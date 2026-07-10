@@ -101,20 +101,31 @@ func (p *vmmPool) kickRefill() {
 }
 
 func (p *vmmPool) spawn(ctx context.Context) (*vmmHandle, error) {
+	return p.spawnPrefixed(ctx, nil)
+}
+
+// spawnInNetns launches a VMM inside a pod network namespace so it can
+// open TAP devices living there. Such VMMs are never pooled: a pool VMM's
+// netns is fixed at spawn time, and pods each have their own.
+func (p *vmmPool) spawnInNetns(ctx context.Context, netnsPath string) (*vmmHandle, error) {
+	return p.spawnPrefixed(ctx, []string{"nsenter", "--net=" + netnsPath})
+}
+
+func (p *vmmPool) spawnPrefixed(ctx context.Context, prefix []string) (*vmmHandle, error) {
 	id := sandbox.NewID()
 	dir := filepath.Join(p.stateDir, id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
 	apiSock := filepath.Join(dir, "api.sock")
-	cmd, err := startVMM(p.binary, apiSock, dir)
+	cmd, err := startVMMPrefixed(prefix, p.binary, apiSock, dir)
 	if err != nil {
 		return nil, err
 	}
 	api := NewAPIClient(apiSock)
 	if err := waitReady(ctx, p.bootWait, func() error { return api.Ping(ctx) }); err != nil {
 		_ = cmd.Process.Kill()
-		return nil, fmt.Errorf("prewarmed VMM API not ready: %w", err)
+		return nil, fmt.Errorf("VMM API not ready: %w", err)
 	}
 	return &vmmHandle{id: id, dir: dir, cmd: cmd, api: api}, nil
 }

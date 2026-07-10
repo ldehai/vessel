@@ -128,7 +128,9 @@ CH v52 的 userfaultfd 按需缺页解耦了两者——256MiB 模板与 128MiB 
   已完成**（`pkg/image`：erofs 优先、ext4 兜底，CH 驱动 boot 时自动打包）。
   **非交互 Exec 已完成**（`ctr task exec` / `kubectl exec`：OCI args 经 vsock
   agent 执行，stdout/stderr 写 containerd FIFO，退出发 TaskExit 带 exec id；
-  terminal/stdin 显式 Unimplemented）。剩：CNI 桥接、真集群 e2e（见 docs/kubernetes.md）
+  terminal/stdin 显式 Unimplemented）。**CNI 网络桥接已完成**（`pkg/vmnet`：
+  pod netns 内 tc-mirror TAP↔veth、guest 采用 pod IP/网关/MTU；真 ip/tc 验证，
+  kvm-e2e step 10 从 guest 内 ping 通网关）。剩：真集群 kubectl e2e（见 docs/kubernetes.md）
 - [ ] E2B envd 数据面 gRPC 兼容、erofs 镜像分层
 
 ## AI 参与说明

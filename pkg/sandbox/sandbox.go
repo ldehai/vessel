@@ -32,6 +32,10 @@ type Spec struct {
 	VCPUs   int               // vCPU count (VM drivers)
 	MemMiB  int               // memory limit
 	Timeout time.Duration     // max lifetime, 0 = unlimited
+	// Netns, when set, is the path to a CNI-configured network namespace
+	// (the pod netns from a containerd bundle). VM drivers bridge its eth0
+	// into the guest; empty means no pod networking.
+	Netns string
 }
 
 // Instance is a live sandbox created by a Driver.

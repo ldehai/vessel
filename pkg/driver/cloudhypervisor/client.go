@@ -37,9 +37,17 @@ type VMConfig struct {
 	Memory  MemoryConfig  `json:"memory"`
 	Payload PayloadConfig `json:"payload"`
 	Disks   []DiskConfig  `json:"disks,omitempty"`
+	Net     []NetDevice   `json:"net,omitempty"`
 	Vsock   *VsockConfig  `json:"vsock,omitempty"`
 	Serial  *ConsoleCfg   `json:"serial,omitempty"`
 	Console *ConsoleCfg   `json:"console,omitempty"`
+}
+
+// NetDevice attaches a host TAP to the guest as virtio-net. The guest NIC
+// clones the CNI veth's MAC so pod-side ARP and filters keep matching.
+type NetDevice struct {
+	Tap string `json:"tap"`
+	MAC string `json:"mac,omitempty"`
 }
 
 type CPUsConfig struct {

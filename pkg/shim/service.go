@@ -118,7 +118,11 @@ func (s *Service) Create(ctx context.Context, r *taskapi.CreateTaskRequest) (*ta
 		}
 		inst, err = s.mgr.RestoreFrom(ctx, driver, path)
 	} else {
-		spec := &sandbox.Spec{Name: r.ID, Rootfs: filepath.Join(r.Bundle, "rootfs")}
+		spec := &sandbox.Spec{
+			Name:   r.ID,
+			Rootfs: filepath.Join(r.Bundle, "rootfs"),
+			Netns:  bundleNetns(r.Bundle), // CNI-configured pod netns, if any
+		}
 		inst, err = s.mgr.Create(ctx, s.defaultDriver, spec)
 	}
 	if err != nil {
@@ -381,6 +385,36 @@ func tspb(t time.Time) *timestamppb.Timestamp {
 }
 
 // bundleAnnotation reads .annotations[key] from an OCI bundle's config.json.
+// bundleNetns reads the pod network namespace path from an OCI bundle's
+// config.json (linux.namespaces[type=network].path). CNI has already
+// configured eth0 there; empty means host networking / no netns.
+func bundleNetns(bundle string) string {
+	if bundle == "" {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(bundle, "config.json"))
+	if err != nil {
+		return ""
+	}
+	var spec struct {
+		Linux struct {
+			Namespaces []struct {
+				Type string `json:"type"`
+				Path string `json:"path"`
+			} `json:"namespaces"`
+		} `json:"linux"`
+	}
+	if json.Unmarshal(data, &spec) != nil {
+		return ""
+	}
+	for _, ns := range spec.Linux.Namespaces {
+		if ns.Type == "network" {
+			return ns.Path
+		}
+	}
+	return ""
+}
+
 func bundleAnnotation(bundle, key string) string {
 	if bundle == "" {
 		return ""

@@ -187,8 +187,8 @@ type Instance struct {
 	agent  *agent.Client
 	state  sandbox.State
 	cfgDrv Config
-	netns  string    // pod netns path ("" = no pod networking)
-	netCfg *netSetup // populated by setupNetwork when netns is set
+	netns  string     // pod netns path ("" = no pod networking)
+	netCfg *netSetup  // populated by setupNetwork when netns is set
 }
 
 func (i *Instance) ID() string           { return i.id }

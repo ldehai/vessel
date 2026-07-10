@@ -97,13 +97,20 @@ engine, three front doors (K8s, native REST, E2B).
   default image, or a restored template) is used as-is. This is what lets
   a containerd task actually become a microVM rather than a process
   sandbox.
+- **Pod networking** (`pkg/vmnet` + `netguest.go`): the shim reads the
+  pod's network namespace from the OCI bundle; the CH driver spawns the VMM
+  inside that netns (so it can open the TAP there), cross-mirrors packets
+  between the CNI veth and a TAP with tc mirred (Kata's approach), attaches
+  the TAP as virtio-net cloning the veth's MAC, and has the guest agent
+  adopt the pod's IP/gateway/MTU on eth0. Netns'd pods bypass the prewarmed
+  pool (a pooled VMM's netns is fixed at spawn). Verified end to end with
+  real ip/tc: `kvm-e2e.sh` step 10 boots a VM into a CNI-style netns and
+  pings the gateway from inside the guest.
 
 ## What's next
 
-- Pod networking: bridge the CNI netns into the VM (Kata's tc-mirror /
-  vhost-net approach).
-- Real-cluster e2e: `kubectl run` a template-annotated pod, `kubectl exec`
-  (needs Exec), `kubectl delete`.
+- Real-cluster e2e: `kubectl run` a template-annotated pod, `kubectl exec`,
+  `kubectl delete` on a live node.
 
 ## Usage
 
