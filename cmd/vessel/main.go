@@ -16,7 +16,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/ldehai/vessel/pkg/agent"
 	"github.com/ldehai/vessel/pkg/api"
@@ -133,11 +136,33 @@ E2B SDK drop-in — point the SDK at this URL, no code changes:
 
 `, *addr, driver, *addr, driver, *addr)
 
-	if err := http.ListenAndServe(*addr, httpHandler(mgr, driver)); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+	return serveHTTP(*addr, httpHandler(mgr, driver), mgr)
+}
+
+// serveHTTP runs the API server until SIGINT/SIGTERM, then stops every
+// sandbox so no cloud-hypervisor child outlives the daemon.
+func serveHTTP(addr string, h http.Handler, mgr *sandbox.Manager) int {
+	srv := &http.Server{Addr: addr, Handler: h}
+	errCh := make(chan error, 1)
+	go func() { errCh <- srv.ListenAndServe() }()
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	select {
+	case err := <-errCh:
+		if err != nil && err != http.ErrServerClosed {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		return 0
+	case <-ctx.Done():
+		fmt.Fprintln(os.Stderr, "\nshutting down: stopping sandboxes…")
+		sctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		mgr.Shutdown(sctx)
+		_ = srv.Shutdown(sctx)
+		return 0
 	}
-	return 0
 }
 
 // cmdAgent runs the guest-side agent (same behavior as the standalone
@@ -208,11 +233,7 @@ func cmdServe(mgr *sandbox.Manager, args []string) int {
 	_ = fs.Parse(args)
 
 	fmt.Println("vessel API listening on", *addr, "(native /v1 + E2B-compatible /sandboxes)")
-	if err := http.ListenAndServe(*addr, httpHandler(mgr, "cloudhypervisor")); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
-	}
-	return 0
+	return serveHTTP(*addr, httpHandler(mgr, "cloudhypervisor"), mgr)
 }
 
 func usage() {

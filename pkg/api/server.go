@@ -20,6 +20,7 @@ func NewServer(mgr *sandbox.Manager) *Server {
 	s.mux.HandleFunc("GET /v1/sandboxes", s.list)
 	s.mux.HandleFunc("POST /v1/sandboxes", s.create)
 	s.mux.HandleFunc("POST /v1/sandboxes/{id}/exec", s.exec)
+	s.mux.HandleFunc("DELETE /v1/sandboxes/{id}", s.delete)
 	s.mux.HandleFunc("POST /v1/sandboxes/{id}/snapshot", s.snapshot)
 	s.mux.HandleFunc("POST /v1/sandboxes/{id}/fork", s.fork)
 	s.mux.HandleFunc("POST /v1/sandboxes/restore", s.restore)
@@ -65,6 +66,16 @@ func (s *Server) list(w http.ResponseWriter, _ *http.Request) {
 		items = append(items, item{inst.ID(), string(inst.State())})
 	}
 	writeJSON(w, items)
+}
+
+// delete stops a sandbox and reclaims its VMM. Without this a client using
+// the native API can only leak sandboxes.
+func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
+	if err := s.mgr.Delete(r.Context(), r.PathValue("id")); err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type execReq struct {

@@ -98,3 +98,15 @@ if [ -n "$TEMPLATE" ]; then
   fi
 fi
 rm -rf "$FORK_DIR"
+
+# The benchmark creates many sandboxes and never deletes them inside the
+# timed loops (a delete would skew latency). Sweep them all now so no
+# cloud-hypervisor process is left running after the run.
+echo
+echo "cleanup: deleting all benchmark sandboxes"
+IDS=$(curl -fsS "$URL/v1/sandboxes" | grep -o '"id":"[^"]*"' | sed -E 's/"id":"([^"]+)"/\1/')
+COUNT=0
+for id in $IDS; do
+  curl -fsS -X DELETE "$URL/v1/sandboxes/$id" >/dev/null 2>&1 && COUNT=$((COUNT + 1))
+done
+echo "  deleted $COUNT sandboxes"

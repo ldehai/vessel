@@ -12,7 +12,12 @@ type FakeDriver struct {
 	ExecOut    string
 	ExecCode   int
 	Snapshots  map[string][]byte // path -> data written
+	Closed     bool              // set by Close (Manager.Shutdown reaps drivers)
 }
+
+// Close records that the driver was closed, exercising Manager.Shutdown's
+// driver-reaping path.
+func (f *FakeDriver) Close() { f.Closed = true }
 
 func NewFakeDriver() *FakeDriver {
 	return &FakeDriver{DriverName: "fake", ExecOut: "fake-out", Snapshots: map[string][]byte{}}

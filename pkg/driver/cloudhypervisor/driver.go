@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/ldehai/vessel/pkg/agent"
@@ -75,6 +76,11 @@ func (d *Driver) Name() string { return "cloudhypervisor" }
 // Warm pre-spawns PoolSize VMM processes in the background. Call once at
 // daemon startup; one-shot CLI use can skip it.
 func (d *Driver) Warm() { d.pool.kickRefill() }
+
+// Close kills the idle VMMs the pool is holding. Live sandboxes are owned
+// by the Manager (Shutdown stops them); this reaps only the prewarmed
+// spares so none outlive the daemon.
+func (d *Driver) Close() { d.pool.close() }
 
 // Create takes a ready VMM (prewarmed or freshly spawned), boots a microVM
 // and waits for the in-guest vessel-agent to answer over hybrid vsock.
@@ -404,6 +410,11 @@ func startVMMPrefixed(prefix []string, binary, apiSock, dir string) (*exec.Cmd, 
 	argv := append(append([]string{}, prefix...), binary, "--api-socket", apiSock)
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Stdout, cmd.Stderr = logf, logf
+	// Safety net: if the daemon dies without a clean Shutdown (crash, SIGKILL),
+	// the kernel sends the child SIGKILL too, so no cloud-hypervisor is
+	// orphaned. The clean path (Manager.Shutdown -> Stop/Close) still runs
+	// first; this only covers the ungraceful case.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 	if err := cmd.Start(); err != nil {
 		logf.Close()
 		return nil, fmt.Errorf("start cloud-hypervisor (%v): %w", argv, err)

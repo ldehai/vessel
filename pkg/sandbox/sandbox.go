@@ -140,6 +140,47 @@ func (m *Manager) List() []Instance {
 	return out
 }
 
+// Delete stops sandbox id and drops it from tracking. Idempotent-ish: an
+// unknown id is an error so callers can distinguish "already gone".
+func (m *Manager) Delete(ctx context.Context, id string) error {
+	m.mu.Lock()
+	e, ok := m.instances[id]
+	if ok {
+		delete(m.instances, id)
+	}
+	m.mu.Unlock()
+	if !ok {
+		return errors.New("unknown sandbox: " + id)
+	}
+	return e.inst.Stop(ctx)
+}
+
+// Shutdown stops every tracked sandbox. Called on daemon exit so VMM
+// child processes never outlive the manager. Also closes any driver that
+// holds background resources (e.g. a prewarmed VMM pool).
+func (m *Manager) Shutdown(ctx context.Context) {
+	m.mu.Lock()
+	insts := make([]Instance, 0, len(m.instances))
+	for _, e := range m.instances {
+		insts = append(insts, e.inst)
+	}
+	m.instances = map[string]entry{}
+	drivers := make([]Driver, 0, len(m.drivers))
+	for _, d := range m.drivers {
+		drivers = append(drivers, d)
+	}
+	m.mu.Unlock()
+
+	for _, inst := range insts {
+		_ = inst.Stop(ctx)
+	}
+	for _, d := range drivers {
+		if c, ok := d.(interface{ Close() }); ok {
+			c.Close()
+		}
+	}
+}
+
 // Snapshot persists sandbox id to path.
 func (m *Manager) Snapshot(ctx context.Context, id, path string) error {
 	m.mu.RLock()

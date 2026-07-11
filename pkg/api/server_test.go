@@ -27,6 +27,37 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
+func TestDeleteSandbox(t *testing.T) {
+	ts, mgr := newTestServer(t)
+
+	resp, err := http.Post(ts.URL+"/v1/sandboxes", "application/json",
+		strings.NewReader(`{"driver":"fake","spec":{}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created struct{ ID string }
+	_ = json.NewDecoder(resp.Body).Decode(&created)
+	if _, ok := mgr.Get(created.ID); !ok {
+		t.Fatal("sandbox not created")
+	}
+
+	req, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/sandboxes/"+created.ID, nil)
+	dr, err := http.DefaultClient.Do(req)
+	if err != nil || dr.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete: %d %v", dr.StatusCode, err)
+	}
+	if _, ok := mgr.Get(created.ID); ok {
+		t.Fatal("sandbox still tracked after DELETE")
+	}
+
+	// Deleting an unknown id -> 404.
+	req2, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/sandboxes/nope", nil)
+	dr2, _ := http.DefaultClient.Do(req2)
+	if dr2.StatusCode != http.StatusNotFound {
+		t.Fatalf("delete unknown = %d, want 404", dr2.StatusCode)
+	}
+}
+
 func TestCreateAndExec(t *testing.T) {
 	ts, _ := newTestServer(t)
 
