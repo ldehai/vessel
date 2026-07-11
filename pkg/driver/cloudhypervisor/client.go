@@ -15,11 +15,13 @@ import (
 
 // APIClient talks to one cloud-hypervisor process via its --api-socket.
 type APIClient struct {
-	http *http.Client
+	http       *http.Client
+	socketPath string // kept for the SCM_RIGHTS restore path (see restore_fds.go)
 }
 
 func NewAPIClient(socketPath string) *APIClient {
 	return &APIClient{
+		socketPath: socketPath,
 		http: &http.Client{
 			Transport: &http.Transport{
 				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -99,6 +101,18 @@ type RestoreConfig struct {
 	MemoryRestoreMode string `json:"memory_restore_mode,omitempty"`
 	// Resume starts the restored VM immediately, saving a vm.resume call.
 	Resume bool `json:"resume,omitempty"`
+	// NetFDs re-backs the snapshot's net devices with fresh TAP fds passed
+	// out-of-band via SCM_RIGHTS (see restore_fds.go). The body only names
+	// each device id and its fd count; the actual fds ride the socket.
+	NetFDs []RestoredNetConfig `json:"net_fds,omitempty"`
+}
+
+// RestoredNetConfig names a net device to re-back at restore and how many
+// fds accompany it. Matches CH's RestoredNetConfig; the fds themselves are
+// sent as ancillary data, not in this JSON.
+type RestoredNetConfig struct {
+	ID     string `json:"id"`
+	NumFDs uint   `json:"num_fds"`
 }
 
 func (c *APIClient) Ping(ctx context.Context) error {
