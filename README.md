@@ -1,21 +1,46 @@
 # vessel（暂定名）
 
-Agent 原生沙箱运行时：底层复用成熟 VMM（Cloud Hypervisor，驱动可插拔），上层同时面向
-K8s（后续 containerd shim）和 AI 应用（REST API + SDK），核心卖点是快照 fork——
-一个预热好的模板沙箱克隆出 N 个会话，跳过内核启动，冷启动目标 <100ms。
-定位与路线图见仓库外的《sandbox-runtime-分析报告.md》。
+Agent 原生沙箱运行时：底层复用成熟 VMM（Cloud Hypervisor，驱动可插拔），上层三面朝外——
+**Kubernetes**（containerd shim v2 + RuntimeClass）、**AI 应用**（原生 REST + Python SDK）、
+**E2B SDK**（drop-in 迁移）。核心卖点是快照恢复：一个预热好的模板沙箱恢复出 N 个会话、
+跳过内核启动。定位与竞品分析（含腾讯 CubeSandbox 对比）见仓库外的《sandbox-runtime-分析报告.md》。
 
-## 当前状态
+## 差异化定位
 
-M1~M3 已实现：
+快启动如今是赛道标配（CubeSandbox 等都做到了），vessel 竞争在"**在哪跑、怎么跑**"：
 
-- **核心域**（`pkg/sandbox`）：Spec / Instance / Driver / Restorer 接口，Manager 生命周期与 fork 语义
-- **process 驱动**（`pkg/driver/process`）：Linux user+pid+mnt+uts+ipc namespace，开发测试用，非生产隔离
-- **Cloud Hypervisor 驱动**（`pkg/driver/cloudhypervisor`）：REST API 客户端、microVM 启动、
-  hybrid vsock（CONNECT/OK 握手）连接 guest agent、pause+snapshot、restore+resume
-- **guest agent**（`pkg/agent` + `cmd/vessel-agent`）：JSON-over-vsock 协议，exec / 文件读写，
-  作为 guest init 运行
-- **REST API**（`pkg/api`）：create / list / exec / snapshot / fork
+- **Kubernetes 原生**：一个 containerd shim，`runtimeClassName: vessel` 一行进集群——
+  而非另起一套平行编排栈。pod 注解 `vessel.dev/template=<id>` 让 pod 从缓存快照**恢复**
+  （数十毫秒）而非启动，这是目前没有任何开源运行时提供的能力。
+- **活体 fork**：对一个正在运行、已加载会话状态的沙箱做分叉（Agent 多分支探索），
+  不只是从干净模板克隆。
+- **单静态二进制自托管**：`vessel up` 一条命令从裸机到可用，无 Docker / 数据库依赖；
+  x86_64 + arm64 双架构。
+
+## 实测性能（Ubuntu 24.04 / KVM / CH v52，n=10）
+
+| 路径 | 128MiB | 256MiB | 说明 |
+|---|---|---|---|
+| 完整启动（boot + exec） | 524ms | 529ms | 与 Kata 同量级 |
+| **restore-only（会话主路径）** | **79ms** | 137ms | OnDemand 缺页 + VMM 池 |
+| 并发 10 clone 全部就绪 | — | 173ms（17ms/clone） | per-clone 快照覆盖层 |
+
+restore 延迟与模板内存解耦（userfaultfd 按需缺页），并发靠硬链接快照覆盖层 + per-clone vsock。
+
+## 组件
+
+- **核心域**（`pkg/sandbox`）：Spec / Instance / Driver / Restorer 接口，Manager 生命周期
+  （create / delete / snapshot / fork / restore）与优雅 shutdown（reap 所有 VMM）
+- **Cloud Hypervisor 驱动**（`pkg/driver/cloudhypervisor`）：microVM 生命周期、hybrid vsock、
+  OnDemand restore、VMM 预启动池、OCI rootfs→块镜像自动打包、pod 网络
+- **process 驱动**（`pkg/driver/process`）：namespace 隔离，开发/无 KVM 降级用
+- **guest agent**（`pkg/agent`，即 vessel 二进制的 `agent` 子命令）：vsock 上的 exec / 文件 / 配网
+- **containerd shim v2**（`pkg/shim` + `cmd/containerd-shim-vessel-v1`）：Task service、
+  start/delete 握手、TaskExit 事件、模板注解恢复、非交互 exec
+- **网络**（`pkg/vmnet`）：CNI netns 内 tc-mirror TAP↔veth，guest 采用 pod IP
+- **镜像**（`pkg/image`）：目录 rootfs → erofs/ext4 块镜像
+- **REST API**（`pkg/api`）：create / list / exec / delete / snapshot / fork / restore
+- **E2B 兼容层**（`pkg/e2b`）：E2B 控制面 API（drop-in）
 - **Python SDK**（`sdk/python/vessel.py`）：零依赖客户端
 
 ## 快速开始
@@ -93,45 +118,24 @@ sdk/python/                  Python SDK
 go test ./...
 ```
 
-单元测试用 mock 覆盖 VMM 交互；真机验证用 `scripts/kvm-e2e.sh`（Linux + KVM）。
-
-## 实测数据（2026-07，Ubuntu 24.04 x86_64 / KVM / CH v45）
-
-256MiB 模板，n=10，avg（CH v52，OnDemand restore）：
-
-| 路径 | v0.1 (Copy) | **v0.2 (OnDemand)** | 说明 |
-|---|---|---|---|
-| 完整启动（boot + 握手 + exec） | 529ms | 521ms | 与 Kata 同量级 |
-| fork（snapshot+restore + exec） | 224ms | **86ms** | OnDemand + 自动 resume |
-| restore-only（会话主路径） | 137ms | **70ms（best 58ms）** | 与模板内存解耦 |
-| **并发 10 clone 全部就绪** | 不支持 | **173ms（17ms/clone）** | per-clone 快照覆盖层 |
-
-v0.1 时 restore 延迟随模板内存线性增长（纯内存文件读取）；v0.2 用
-CH v52 的 userfaultfd 按需缺页解耦了两者——256MiB 模板与 128MiB 同样快，
-页面在首次访问时才载入。并发 clone 靠硬链接快照覆盖层 + per-clone vsock
-路径实现，10 路并发摊薄到 17ms/clone。
+单元测试用 mock 覆盖 VMM 交互（含 SCM_RIGHTS fd 传递等）；真机验证用
+`scripts/kvm-e2e.sh`（KVM，10 步含联网 pod）和 `scripts/ctr-e2e.sh`（真 containerd）。
 
 ## 路线图
 
-- [x] M1 核心域 + process 驱动 + REST + CLI
-- [x] M2 guest agent（vsock）+ Cloud Hypervisor 驱动
-- [x] M3 snapshot / restore / fork + Python SDK
-- [x] M3.5 guest 镜像脚本 + KVM 真机 e2e 全链路（create/exec/snapshot/fork）
-- [x] v0.2 按需缺页恢复（内存解耦）+ 并发 clone + VMM 预启动池
-- [x] vessel up 一键引导（双架构、无 KVM 降级、二进制自嵌为 agent）
-- [x] E2B 兼容控制面（SDK drop-in 迁移）
-- [~] v0.3 containerd shim v2 + K8s RuntimeClass（进行中）：Task service 映射、
-  pod 注解 `vessel.dev/template` 走恢复路径（未注册模板 fail-fast）、
-  **containerd 启停握手 + TaskExit 事件发布已完成并通过真机验收**
-  （2026-07 Ubuntu 24.04：`scripts/ctr-e2e.sh` 中真 containerd 拉起 shim、
-  ctr run→RUNNING→kill→STOPPED→rm 全链路通过）。**OCI rootfs→块镜像转换
-  已完成**（`pkg/image`：erofs 优先、ext4 兜底，CH 驱动 boot 时自动打包）。
-  **非交互 Exec 已完成**（`ctr task exec` / `kubectl exec`：OCI args 经 vsock
-  agent 执行，stdout/stderr 写 containerd FIFO，退出发 TaskExit 带 exec id；
-  terminal/stdin 显式 Unimplemented）。**CNI 网络桥接已完成**（`pkg/vmnet`：
-  pod netns 内 tc-mirror TAP↔veth、guest 采用 pod IP/网关/MTU；真 ip/tc 验证，
-  kvm-e2e step 10 从 guest 内 ping 通网关）。剩：真集群 kubectl e2e（见 docs/kubernetes.md）
-- [ ] E2B envd 数据面 gRPC 兼容、erofs 镜像分层
+- [x] **v0.1** — sub-100ms 会话恢复：核心域 + CH 驱动 + vsock agent +
+  snapshot/restore/fork + REST + Python SDK；KVM 真机验证 79ms 恢复
+- [x] **v0.2** — 内存解耦恢复（userfaultfd 按需缺页）+ 并发 clone（17ms/clone）+
+  VMM 预启动池 + `vessel up` 一键引导（双架构、无 KVM 降级）
+- [x] **v0.2.x** — E2B 兼容控制面（SDK drop-in 迁移）
+- [x] **v0.3.0** — containerd shim v2 + K8s RuntimeClass：Task service、
+  start/delete 握手 + TaskExit 事件（真 containerd 验收）、OCI rootfs→块镜像、
+  非交互 exec（`kubectl exec`）、CNI pod 网络（tc-mirror）、干净的 VMM 生命周期
+  （DELETE 端点 + 优雅 shutdown + Pdeathsig 兜底）
+- [~] **v0.3.1**（进行中）— 联网 pod 走池化 restore：pod netns 内打开 TAP fd
+  （fd 超越 namespace）✅、SCM_RIGHTS 把 fd 传给 CH restore ✅、
+  接线池化 restore+net_fds 路径 ⏳（当前联网 pod 是 spawn-in-netns 全启动，正确但未池化）
+- [ ] 真集群 `kubectl run/exec/delete` e2e、E2B envd 数据面 gRPC 兼容、erofs 镜像分层
 
 ## AI 参与说明
 
