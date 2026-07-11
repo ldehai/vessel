@@ -198,6 +198,34 @@ if ip link add "$HOSTVETH" type veth peer name eth0 netns "$NETNS" 2>/dev/null; 
   echo "guest net: $OUT"
   echo "$OUT" | grep -q net-ok || { dump_logs; die "guest did not adopt pod IP / reach gateway"; }
   echo "pod netns -> tc-mirror TAP -> guest eth0 -> gateway reachable OK"
+
+  step "10b. networked restore (method B): pooled VM + hotplug NIC in netns"
+  # Snapshot a template, recreate the netns, then restore INTO it: the pool
+  # VM (host netns) is reused and the NIC is hotplugged with a TAP fd opened
+  # in the pod netns. This is the fast path — restore, not full boot.
+  ip netns add "$NETNS" 2>/dev/null || true
+  ip link add "$HOSTVETH" type veth peer name eth0 netns "$NETNS" 2>/dev/null || true
+  ip addr add "$GW_IP/24" dev "$HOSTVETH" 2>/dev/null; ip link set "$HOSTVETH" up 2>/dev/null
+  ip netns exec "$NETNS" ip addr add "$GUEST_IP" dev eth0 2>/dev/null
+  ip netns exec "$NETNS" ip link set eth0 up 2>/dev/null
+  ip netns exec "$NETNS" ip link set lo up 2>/dev/null
+  ip netns exec "$NETNS" ip route add default via "$GW_IP" 2>/dev/null
+
+  curl -fsS -X POST "localhost:7070/v1/sandboxes/$ID/snapshot" \
+    -d "{\"path\":\"$WORK/snap-net\"}" >/dev/null || die "snapshot for net restore"
+  HTTP=$(curl -sS -w '%{http_code}' -o rnet.json -X POST localhost:7070/v1/sandboxes/restore \
+    -d "{\"driver\":\"cloudhypervisor\",\"path\":\"$WORK/snap-net\",\"netns\":\"/var/run/netns/$NETNS\"}")
+  echo "networked restore HTTP $HTTP: $(cat rnet.json)"
+  if [ "$HTTP" = 200 ]; then
+    RID=$(sed -E 's/.*"id":"([^"]+)".*/\1/' rnet.json)
+    OUT=$(curl -sS -X POST "localhost:7070/v1/sandboxes/$RID/exec" \
+      -d '{"cmd":["sh","-c","ping -c1 -W2 10.99.0.1 >/dev/null && echo restored-net-ok"]}')
+    echo "restored guest net: $OUT"
+    echo "$OUT" | grep -q restored-net-ok || { dump_logs; die "restored pod has no network"; }
+    echo "template restore + hotplug NIC + guest reaches gateway OK"
+  else
+    dump_logs; die "networked restore (HTTP $HTTP)"
+  fi
 else
   echo "(skip: cannot create veth into netns; needs root/CAP_NET_ADMIN)"
 fi

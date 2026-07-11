@@ -30,11 +30,11 @@ func (f *FakeDriver) Create(_ context.Context, spec *Spec) (Instance, error) {
 }
 
 // Restore implements Restorer: returns a fresh instance "from" the snapshot.
-func (f *FakeDriver) Restore(_ context.Context, path string) (Instance, error) {
+func (f *FakeDriver) Restore(_ context.Context, path string, opts RestoreOpts) (Instance, error) {
 	if _, ok := f.Snapshots[path]; !ok {
 		return nil, ErrNotSupported
 	}
-	return &FakeInstance{id: NewID(), drv: f, state: StateRunning, restoredFrom: path}, nil
+	return &FakeInstance{id: NewID(), drv: f, state: StateRunning, restoredFrom: path, netns: opts.Netns}, nil
 }
 
 type FakeInstance struct {
@@ -43,10 +43,14 @@ type FakeInstance struct {
 	drv          *FakeDriver
 	state        State
 	restoredFrom string
+	netns        string
 }
 
 // RestoredFrom reports the snapshot path this instance was forked from.
 func (f *FakeInstance) RestoredFrom() string { return f.restoredFrom }
+
+// Netns reports the netns a restore was asked to bridge (test hook).
+func (f *FakeInstance) Netns() string { return f.netns }
 
 func (f *FakeInstance) ID() string   { return f.id }
 func (f *FakeInstance) State() State { return f.state }

@@ -122,6 +122,36 @@ func TestTemplateRestore(t *testing.T) {
 	}
 }
 
+// A template-annotated pod that also carries a CNI netns must pass that
+// netns to the restore (method B: pooled networked fast path).
+func TestTemplateRestoreForwardsNetns(t *testing.T) {
+	d := sandbox.NewFakeDriver()
+	mgr := sandbox.NewManager()
+	mgr.RegisterDriver(d)
+	d.Snapshots["/snap/py"] = []byte("tpl")
+	s := NewService(mgr, "fake", MapTemplates{"python-3.12": {Driver: "fake", Path: "/snap/py"}})
+
+	dir := t.TempDir()
+	writeOCIConfig(t, dir, map[string]any{
+		"annotations": map[string]string{TemplateAnnotation: "python-3.12"},
+		"linux": map[string]any{
+			"namespaces": []map[string]any{{"type": "network", "path": "/var/run/netns/cni-xyz"}},
+		},
+	})
+	if _, err := s.Create(context.Background(), &taskapi.CreateTaskRequest{ID: "p", Bundle: dir}); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	inst := s.tasks["p"].inst.(*sandbox.FakeInstance)
+	s.mu.Unlock()
+	if inst.RestoredFrom() != "/snap/py" {
+		t.Fatalf("expected restore, got %q", inst.RestoredFrom())
+	}
+	if inst.Netns() != "/var/run/netns/cni-xyz" {
+		t.Fatalf("netns not forwarded to restore: %q", inst.Netns())
+	}
+}
+
 // An annotation naming an unregistered template is an explicit request the
 // shim cannot honor: fail fast, never silently cold-boot.
 func TestUnknownTemplateFailsCreate(t *testing.T) {

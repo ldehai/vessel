@@ -48,8 +48,14 @@ type VMConfig struct {
 // NetDevice attaches a host TAP to the guest as virtio-net. The guest NIC
 // clones the CNI veth's MAC so pod-side ARP and filters keep matching.
 type NetDevice struct {
-	Tap string `json:"tap"`
+	Tap string `json:"tap,omitempty"`
 	MAC string `json:"mac,omitempty"`
+	// NumFDs tells CH how many tap fds accompany this device over
+	// SCM_RIGHTS (set for AddNetWithFDs; the fds themselves are not in the
+	// JSON — see restore_fds.go). When set, Tap is omitted: the device is
+	// backed by the passed fds, not a tap opened by CH itself.
+	NumFDs uint   `json:"num_fds,omitempty"`
+	ID     string `json:"id,omitempty"`
 }
 
 type CPUsConfig struct {

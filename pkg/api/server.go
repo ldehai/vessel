@@ -140,6 +140,7 @@ func (s *Server) fork(w http.ResponseWriter, r *http.Request) {
 type restoreReq struct {
 	Driver string `json:"driver"`
 	Path   string `json:"path"`
+	Netns  string `json:"netns,omitempty"` // pod netns to bridge (networked restore)
 }
 
 func (s *Server) restore(w http.ResponseWriter, r *http.Request) {
@@ -151,7 +152,7 @@ func (s *Server) restore(w http.ResponseWriter, r *http.Request) {
 	if req.Driver == "" {
 		req.Driver = "cloudhypervisor"
 	}
-	inst, err := s.mgr.RestoreFrom(r.Context(), req.Driver, req.Path)
+	inst, err := s.mgr.RestoreFrom(r.Context(), req.Driver, req.Path, sandbox.RestoreOpts{Netns: req.Netns})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

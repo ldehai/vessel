@@ -88,3 +88,49 @@ func (i *Instance) teardownNetwork() {
 	_ = i.netCfg.ns.TeardownTap(i.netCfg.tap)
 	i.netCfg = nil
 }
+
+// applyRestoredNetwork gives a restored, running VM its pod network by
+// hotplugging a NIC — the method-B fast path. Unlike setupNetwork (which
+// runs before vm.create and needs the VMM inside the netns), this opens
+// the TAP fd in the pod netns and hands it to the already-running,
+// host-netns pool VMM via vm.add-net + SCM_RIGHTS. The template needed no
+// net device: the NIC is added fresh.
+func (i *Instance) applyRestoredNetwork() error {
+	ns := vmnet.EnterNS(i.netns)
+
+	cfg, err := ns.ReadConfig(cniDev)
+	if err != nil {
+		return fmt.Errorf("read %s in %s: %w", cniDev, i.netns, err)
+	}
+	if cfg.IP == "" {
+		return fmt.Errorf("%s in %s has no IPv4 address (CNI not run?)", cniDev, i.netns)
+	}
+
+	tap := tapName(i.id)
+	if err := ns.SetupTap(cniDev, tap); err != nil {
+		return fmt.Errorf("mirror %s->%s: %w", cniDev, tap, err)
+	}
+	i.netCfg = &netSetup{ns: ns, tap: tap, cfg: cfg}
+
+	// Open a TAP fd inside the pod netns; it outlives the netns and is
+	// handed to the host-netns VMM. Closed after add-net dups it.
+	tapFile, err := vmnet.OpenTapFD(i.netns, tap)
+	if err != nil {
+		return fmt.Errorf("open tap fd in %s: %w", i.netns, err)
+	}
+	defer tapFile.Close()
+
+	if err := i.api.AddNetWithFDs(
+		&NetDevice{ID: "_net0", MAC: cfg.MAC, NumFDs: 1},
+		[]int{int(tapFile.Fd())},
+	); err != nil {
+		return fmt.Errorf("hotplug NIC: %w", err)
+	}
+
+	return i.agent.ConfigureNet(&agent.NetConfig{
+		Device:  guestDev,
+		IP:      cfg.IP,
+		Gateway: cfg.Gateway,
+		MTU:     cfg.MTU,
+	})
+}

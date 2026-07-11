@@ -135,7 +135,7 @@ func (h *Handler) resolveAndCreate(r *http.Request, req newSandbox) (sandbox.Ins
 		if driver == "" {
 			driver = h.defaultDriver
 		}
-		return h.mgr.RestoreFrom(r.Context(), driver, tmpl.SnapshotPath)
+		return h.mgr.RestoreFrom(r.Context(), driver, tmpl.SnapshotPath, sandbox.RestoreOpts{})
 	}
 
 	// "base" or unknown template -> fresh sandbox.

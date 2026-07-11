@@ -125,7 +125,11 @@ func (d *Driver) Create(ctx context.Context, spec *sandbox.Spec) (sandbox.Instan
 // Each clone restores from its own overlay snapshot (hardlinked files +
 // rewritten vsock path), so the source VM and any number of concurrent
 // clones never contend on a socket path.
-func (d *Driver) Restore(ctx context.Context, snapshotPath string) (sandbox.Instance, error) {
+func (d *Driver) Restore(ctx context.Context, snapshotPath string, opts sandbox.RestoreOpts) (sandbox.Instance, error) {
+	// The pool VMM lives in the host netns — generic, reusable for any pod.
+	// Pod networking is added AFTER restore by hotplugging a NIC backed by
+	// a TAP fd opened in the pod netns (see applyRestoredNetwork), so the
+	// networked pod keeps the sub-100ms restore instead of full-booting.
 	h, err := d.pool.get(ctx)
 	if err != nil {
 		return nil, err
@@ -147,6 +151,7 @@ func (d *Driver) Restore(ctx context.Context, snapshotPath string) (sandbox.Inst
 		vmm:    h.cmd,
 		state:  sandbox.StateCreated,
 		cfgDrv: d.cfg,
+		netns:  opts.Netns,
 	}
 	fail := func(err error) (sandbox.Instance, error) {
 		_ = inst.Stop(context.Background())
@@ -180,6 +185,13 @@ func (d *Driver) Restore(ctx context.Context, snapshotPath string) (sandbox.Inst
 		return fail(fmt.Errorf("guest agent not reachable after restore: %w", err))
 	}
 	inst.agent = agent.NewClient(conn)
+	// Networked pod (method B): hotplug a NIC backed by the pod's TAP and
+	// have the guest adopt the pod IP. A net-less template stays net-less.
+	if inst.netns != "" {
+		if err := inst.applyRestoredNetwork(); err != nil {
+			return fail(fmt.Errorf("pod network after restore: %w", err))
+		}
+	}
 	inst.state = sandbox.StateRunning
 	return inst, nil
 }

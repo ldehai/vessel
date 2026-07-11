@@ -116,7 +116,12 @@ func (s *Service) Create(ctx context.Context, r *taskapi.CreateTaskRequest) (*ta
 		if driver == "" {
 			driver = s.defaultDriver
 		}
-		inst, err = s.mgr.RestoreFrom(ctx, driver, path)
+		// Method B: a template-annotated pod that also has a CNI netns gets
+		// the pooled networked fast path — restore the template, then bridge
+		// the pod netns into it. Non-template pods use the create path.
+		inst, err = s.mgr.RestoreFrom(ctx, driver, path, sandbox.RestoreOpts{
+			Netns: bundleNetns(r.Bundle),
+		})
 	} else {
 		spec := &sandbox.Spec{
 			Name:   r.ID,

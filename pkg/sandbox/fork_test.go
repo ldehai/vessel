@@ -48,7 +48,7 @@ func TestRestoreFrom(t *testing.T) {
 	if err := m.Snapshot(ctx, src.ID(), "/snap/tpl"); err != nil {
 		t.Fatal(err)
 	}
-	clone, err := m.RestoreFrom(ctx, "fake", "/snap/tpl")
+	clone, err := m.RestoreFrom(ctx, "fake", "/snap/tpl", RestoreOpts{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestRestoreFrom(t *testing.T) {
 	if _, ok := m.Get(clone.ID()); !ok {
 		t.Fatal("clone not tracked")
 	}
-	if _, err := m.RestoreFrom(ctx, "nope", "/snap/tpl"); err == nil {
+	if _, err := m.RestoreFrom(ctx, "nope", "/snap/tpl", RestoreOpts{}); err == nil {
 		t.Fatal("want error for unknown driver")
 	}
 }

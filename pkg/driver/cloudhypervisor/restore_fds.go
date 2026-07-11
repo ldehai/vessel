@@ -31,7 +31,27 @@ func (c *APIClient) RestoreVMWithFDs(cfg *RestoreConfig, fds []int) error {
 	if err != nil {
 		return err
 	}
+	return c.apiCallWithFDs("vm.restore", body, fds)
+}
 
+// AddNetWithFDs hotplugs a virtio-net device into a running VM, backing it
+// with tap fds passed via SCM_RIGHTS. This is how a networked pod restored
+// from a net-less template gets its NIC: restore a generic template, then
+// add-net with a TAP fd opened in the pod netns. cfg.NumFDs must match
+// len(fds); the body carries the device shape, the fds ride the socket.
+func (c *APIClient) AddNetWithFDs(cfg *NetDevice, fds []int) error {
+	body, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	return c.apiCallWithFDs("vm.add-net", body, fds)
+}
+
+// apiCallWithFDs issues one PUT to /api/v1/<endpoint> with body, attaching
+// fds as an SCM_RIGHTS control message on the request line — byte-for-byte
+// what cloud-hypervisor's ch-remote send_with_fds does. net/http cannot
+// attach ancillary data, so the request is hand-framed.
+func (c *APIClient) apiCallWithFDs(endpoint string, body []byte, fds []int) error {
 	conn, err := net.DialTimeout("unix", c.socketPath, 5*time.Second)
 	if err != nil {
 		return fmt.Errorf("dial CH api socket: %w", err)
@@ -39,17 +59,16 @@ func (c *APIClient) RestoreVMWithFDs(cfg *RestoreConfig, fds []int) error {
 	defer conn.Close()
 	uc := conn.(*net.UnixConn)
 
-	// 1. Request line + minimal headers carry the fds as ancillary data,
-	//    exactly as CH's send_with_fds does (fds ride the first write).
-	reqLine := "PUT /api/v1/vm.restore HTTP/1.1\r\nHost: localhost\r\nAccept: */*\r\n"
+	// 1. Request line + minimal headers carry the fds (fds ride the first write).
+	reqLine := fmt.Sprintf("PUT /api/v1/%s HTTP/1.1\r\nHost: localhost\r\nAccept: */*\r\n", endpoint)
 	if err := writeWithFDs(uc, []byte(reqLine), fds); err != nil {
-		return fmt.Errorf("send restore request line + fds: %w", err)
+		return fmt.Errorf("send %s request line + fds: %w", endpoint, err)
 	}
 
 	// 2. Content-Length, blank line, then the JSON body as a plain stream.
 	rest := fmt.Sprintf("Content-Length: %d\r\n\r\n%s", len(body), body)
 	if _, err := uc.Write([]byte(rest)); err != nil {
-		return fmt.Errorf("send restore body: %w", err)
+		return fmt.Errorf("send %s body: %w", endpoint, err)
 	}
 
 	return readHTTPStatus(uc)

@@ -60,7 +60,16 @@ type Driver interface {
 // snapshot. Fork = Snapshot + Restore; this is vessel's core primitive
 // for agent workloads (template sandbox -> N cheap session clones).
 type Restorer interface {
-	Restore(ctx context.Context, snapshotPath string) (Instance, error)
+	Restore(ctx context.Context, snapshotPath string, opts RestoreOpts) (Instance, error)
+}
+
+// RestoreOpts carries per-restore parameters that aren't part of the
+// snapshot itself.
+type RestoreOpts struct {
+	// Netns, when set, is a CNI-configured pod network namespace to bridge
+	// into the restored VM (method B: only pods that restore from a
+	// template get the pooled networked fast path).
+	Netns string
 }
 
 // ErrNotSupported is returned for capabilities a driver does not implement.
@@ -195,7 +204,7 @@ func (m *Manager) Snapshot(ctx context.Context, id, path string) error {
 // RestoreFrom creates a new instance from an existing snapshot directory
 // without touching any running sandbox. This is the hot path for agent
 // workloads: snapshot a prewarmed template once, restore per session.
-func (m *Manager) RestoreFrom(ctx context.Context, driver, path string) (Instance, error) {
+func (m *Manager) RestoreFrom(ctx context.Context, driver, path string, opts RestoreOpts) (Instance, error) {
 	m.mu.RLock()
 	d, ok := m.drivers[driver]
 	m.mu.RUnlock()
@@ -206,7 +215,7 @@ func (m *Manager) RestoreFrom(ctx context.Context, driver, path string) (Instanc
 	if !ok {
 		return nil, ErrNotSupported
 	}
-	inst, err := r.Restore(ctx, path)
+	inst, err := r.Restore(ctx, path, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +240,7 @@ func (m *Manager) Fork(ctx context.Context, id, dir string) (Instance, error) {
 	if err := e.inst.Snapshot(ctx, dir); err != nil {
 		return nil, err
 	}
-	clone, err := r.Restore(ctx, dir)
+	clone, err := r.Restore(ctx, dir, RestoreOpts{})
 	if err != nil {
 		return nil, err
 	}

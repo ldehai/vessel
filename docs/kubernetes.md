@@ -98,14 +98,23 @@ engine, three front doors (K8s, native REST, E2B).
   a containerd task actually become a microVM rather than a process
   sandbox.
 - **Pod networking** (`pkg/vmnet` + `netguest.go`): the shim reads the
-  pod's network namespace from the OCI bundle; the CH driver spawns the VMM
-  inside that netns (so it can open the TAP there), cross-mirrors packets
-  between the CNI veth and a TAP with tc mirred (Kata's approach), attaches
-  the TAP as virtio-net cloning the veth's MAC, and has the guest agent
-  adopt the pod's IP/gateway/MTU on eth0. Netns'd pods bypass the prewarmed
-  pool (a pooled VMM's netns is fixed at spawn). Verified end to end with
-  real ip/tc: `kvm-e2e.sh` step 10 boots a VM into a CNI-style netns and
-  pings the gateway from inside the guest.
+  pod's network namespace from the OCI bundle; the CH driver cross-mirrors
+  packets between the CNI veth and a TAP with tc mirred (Kata's approach),
+  attaches the TAP as virtio-net cloning the veth's MAC, and has the guest
+  agent adopt the pod's IP/gateway/MTU on eth0. Two paths:
+  - **Fresh pod** (`vessel.dev/template` absent): the VMM is spawned inside
+    the netns so it can open the TAP by name (bypasses the pool — a pooled
+    VMM's netns is fixed at spawn). Full boot.
+  - **Template pod** (method B, the fast path): a generic host-netns pool
+    VMM restores the template, then the pod's TAP fd — opened in the netns
+    and valid across namespaces — is hotplugged as a NIC via `vm.add-net`
+    with SCM_RIGHTS (`pkg/vmnet.OpenTapFD`, `APIClient.AddNetWithFDs`). The
+    template needs no net device; the NIC is added fresh. Networked pods
+    keep the sub-100ms restore.
+
+  Verified end to end with real ip/tc: `kvm-e2e.sh` step 10 boots a VM into
+  a CNI-style netns and pings the gateway from the guest; step 10b does the
+  same via template restore + hotplug.
 
 ## What's next
 

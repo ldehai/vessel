@@ -132,9 +132,10 @@ go test ./...
   start/delete 握手 + TaskExit 事件（真 containerd 验收）、OCI rootfs→块镜像、
   非交互 exec（`kubectl exec`）、CNI pod 网络（tc-mirror）、干净的 VMM 生命周期
   （DELETE 端点 + 优雅 shutdown + Pdeathsig 兜底）
-- [~] **v0.3.1**（进行中）— 联网 pod 走池化 restore：pod netns 内打开 TAP fd
-  （fd 超越 namespace）✅、SCM_RIGHTS 把 fd 传给 CH restore ✅、
-  接线池化 restore+net_fds 路径 ⏳（当前联网 pod 是 spawn-in-netns 全启动，正确但未池化）
+- [x] **v0.3.1** — 联网 pod 走池化 restore（方案 B）：模板 pod 从池取通用 VMM +
+  restore，恢复后在 pod netns 内打开 TAP fd（fd 超越 namespace）并经 SCM_RIGHTS
+  用 `vm.add-net` 热插 NIC，guest 采用 pod IP。对无网卡模板也成立，联网 pod
+  同享 <100ms 恢复。（非模板 pod 仍走 create+boot 的 spawn-in-netns，正确但非快路径）
 - [ ] 真集群 `kubectl run/exec/delete` e2e、E2B envd 数据面 gRPC 兼容、erofs 镜像分层
 
 ## AI 参与说明

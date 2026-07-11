@@ -134,3 +134,34 @@ func TestRestoreVMWithFDsNoFDs(t *testing.T) {
 		t.Fatalf("numFDs = %d, want 0", got.numFDs)
 	}
 }
+
+// AddNetWithFDs hotplugs a NIC backed by a TAP fd (the method-B networked
+// restore path): the fd rides SCM_RIGHTS, the body carries the device.
+func TestAddNetWithFDs(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "api.sock")
+	receipts := serveFakeRestore(t, sock)
+	c := NewAPIClient(sock)
+
+	f, err := os.CreateTemp(t.TempDir(), "tapfd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	dev := &NetDevice{ID: "_net0", MAC: "aa:bb:cc:dd:ee:ff", NumFDs: 1}
+	if err := c.AddNetWithFDs(dev, []int{int(f.Fd())}); err != nil {
+		t.Fatal(err)
+	}
+
+	got := <-receipts
+	if got.numFDs != 1 || !got.fdValid {
+		t.Fatalf("server received numFDs=%d valid=%v, want 1/true", got.numFDs, got.fdValid)
+	}
+	var sent NetDevice
+	if err := json.Unmarshal([]byte(got.body), &sent); err != nil {
+		t.Fatalf("unparseable add-net body %q: %v", got.body, err)
+	}
+	if sent.ID != "_net0" || sent.MAC != "aa:bb:cc:dd:ee:ff" || sent.NumFDs != 1 || sent.Tap != "" {
+		t.Fatalf("add-net body wrong: %+v (Tap must be omitted when fd-backed)", sent)
+	}
+}
